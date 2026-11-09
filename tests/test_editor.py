@@ -241,3 +241,27 @@ async def test_edit_title_tracks_changes_after_save(filesystem):
         assert filesystem.read_text("/test.txt") == "final text"
         await pilot.press("ctrl+q")
         await wait_until(lambda: not app.query_one(Shell)._busy)
+
+
+async def test_editor_orders_typing_save_and_close_without_quitting_app():
+    from anytext import events
+
+    fs = MemoryFileSystem({"test.txt": ""})
+    app = ShellApp(Session(fs))
+    async with app.run_test() as pilot:
+        editor = await start_editor(app, pilot, "edit test.txt")
+        area = editor.query_one(TextArea)
+        for char in "saved":
+            area.post_message(events.Key(char, char))
+        area.post_message(events.Key("ctrl+s", None))
+        await wait_until(lambda: fs.read_text("/test.txt") == "saved")
+        assert not editor.dirty
+        for char in " discarded":
+            area.post_message(events.Key("space" if char == " " else char, char))
+        area.post_message(events.Key("ctrl+q", None))
+        area.post_message(events.Key("ctrl+q", None))
+        await wait_until(lambda: not app.query_one(Shell)._busy)
+        assert app.is_running
+        assert not app.query(FileEditor)
+        assert app.query_one(CommandInput).has_focus
+        assert fs.read_text("/test.txt") == "saved"

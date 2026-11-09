@@ -1,7 +1,7 @@
 """Interactive file editor for the optional Anytext frontend."""
 
 import anyio
-from anytext import on
+from anytext import events, on
 from anytext.app import ComposeResult
 from anytext.binding import Binding
 from anytext.containers import Vertical
@@ -12,15 +12,30 @@ from rich.text import Text
 from .filesystem import FileSystem
 
 
+class FileTextArea(TextArea):
+    """Consume editor shortcuts in order with edits, before app-wide bindings."""
+
+    async def on_key(self, event: events.Key) -> None:
+        editor = self.query_ancestor(FileEditor)
+        for binding in editor.BINDINGS:
+            if event.key in binding.key.split(",") and editor.check_action(
+                binding.action, ()
+            ):
+                event.stop()
+                event.prevent_default()
+                await editor.run_action(binding.action)
+                return
+
+
 class FileEditor(Vertical):
     """Edit one UTF-8 file without starting a process or leaving the app."""
 
     BINDINGS = [
-        Binding("ctrl+s", "save", "Save", priority=True),
-        Binding("ctrl+q", "close_editor", "Close", priority=True),
-        Binding("ctrl+q", "confirm_discard", "Discard and close", priority=True),
-        Binding("escape", "keep_editing", "Keep editing", priority=True),
-        Binding("ctrl+d", "discard", show=False, priority=True),
+        Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+q", "close_editor", "Close"),
+        Binding("ctrl+q", "confirm_discard", "Discard and close"),
+        Binding("escape", "keep_editing", "Keep editing"),
+        Binding("ctrl+d", "discard", show=False),
     ]
     _confirming_close = var(False, bindings=True)
 
@@ -52,7 +67,7 @@ class FileEditor(Vertical):
     def compose(self) -> ComposeResult:
         with Vertical(id="editor-window"):
             yield Static(Text(self.path), id="editor-title")
-            yield TextArea(self._original, show_line_numbers=True, id="file-text")
+            yield FileTextArea(self._original, show_line_numbers=True, id="file-text")
 
     def on_mount(self) -> None:
         area = self.query_one(TextArea)

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Process file-editor shortcuts in input order so saving includes preceding edits
+  and closing the editor does not fall through to the application quit binding.
+- Wait for rendered pager content in browser regression tests.
+
 ## 0.1.0 — 2026-11-09
 
 Initial release of Anyshell, a portable Python command shell for desktop and browser use.

@@ -27,7 +27,8 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     browser = await chromium.launch({headless: true});
     page = await browser.newPage({viewport: {width: 1100, height: 760}});
     await page.goto(`http://127.0.0.1:${port}/?prompt=${promptPosition}`);
-    await page.waitForFunction(() => document.querySelector('#status').textContent.startsWith('Running'), null, {timeout: 120000});
+    await page.waitForFunction(() => /^(Running|Could not start)/.test(document.querySelector('#status').textContent), null, {timeout: 120000});
+    assert.equal(await page.locator('#error').isHidden(), true, await page.locator('#error').textContent());
     async function python(code) {
       return page.evaluate(code => window.anyshellDemo.pyodide.runPython(code), code);
     }
@@ -131,7 +132,8 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     assert.equal(await python("session.last_status == 0 and not session.filesystem.is_dir('/notes-copy') and session.filesystem.read_text('/moved-notes/fruits.txt') == session.filesystem.read_text('/notes/fruits.txt')"), true);
     await page.keyboard.type('cat notes/fruits.txt | more');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('Pager')) and browser_app.query_one('Pager').loaded"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "bool(browser_app.query('Pager')) and browser_app.query_one('Pager').loaded and browser_app.query_one('Pager').has_focus and [line.text.strip() for line in browser_app.query_one('PagerLog').lines] == ['pear', 'apple', 'banana', 'apricot']"));
     assert.equal(await python("any('apple' in line.text for line in browser_app.query_one('PagerLog').lines)"), true);
     await page.keyboard.press('q');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('Pager') and not browser_app.query_one('Shell')._busy"));
@@ -196,10 +198,16 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
   } catch (error) {
     if (page) {
       try {
+        console.error(await page.evaluate(() => ({
+          status: document.querySelector('#status')?.textContent,
+          error: document.querySelector('#error')?.textContent,
+        })));
         console.error(await page.evaluate(() => window.anyshellDemo?.pyodide.runPython(
-          "repr((session.history, session.running, session.last_status, browser_app.query_one('CommandInput').value, [(e.kind, e.value) for e in browser_app.query_one('Shell').output]))")));
-        await page.screenshot({path: path.join(root, '.cache/browser-failure.png')});
+          "repr((session.history, session.running, session.last_status, [(type(node).__name__) for node in browser_app.query('Shell, FileEditor, Pager')])) if 'session' in globals() else 'Python shell has not initialized'")));
       } catch (diagnosticError) { console.error(String(diagnosticError)); }
+      try {
+        await page.screenshot({path: path.join(root, '.cache/browser-failure.png')});
+      } catch (screenshotError) { console.error(String(screenshotError)); }
     }
     throw error;
   } finally {
