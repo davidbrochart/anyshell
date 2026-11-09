@@ -32,6 +32,8 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     async function python(code) {
       return page.evaluate(code => window.anyshellDemo.pyodide.runPython(code), code);
     }
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "bool(browser_app.query('CommandInput')) and browser_app.query_one('CommandInput').has_focus"));
     assert.equal(await python("browser_app.query_one('Shell').prompt_position"), promptPosition);
     await page.keyboard.type('cat notes/fruits.txt | grep ^a | sort | count');
     await page.keyboard.press('Enter');
@@ -69,7 +71,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.screenshot({path: path.join(root, promptPosition === 'inline' ? '.cache/browser-demo.png' : '.cache/browser-bottom.png')});
     async function command(source) {
       await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
-        "not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').value == ''"));
+        "not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').value == '' and browser_app.query_one('CommandInput').has_focus"));
       await page.keyboard.type(source);
       await page.keyboard.press('Enter');
       await page.waitForFunction(source => window.anyshellDemo.pyodide.runPython(
@@ -88,7 +90,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value.endswith('\\n')"));
     await page.keyboard.type("second'");
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').value == ''"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').value == '' and browser_app.query_one('CommandInput').has_focus"));
     assert.equal(await python("[e.value for e in browser_app.query_one('Shell').output if e.kind == 'output'][-1] == 'first\\nsecond'"), true);
     await page.keyboard.type('s');
     await page.keyboard.press('Tab');
@@ -110,7 +112,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.screenshot({path: path.join(root, `.cache/browser-editor-${promptPosition}.png`)});
     await page.keyboard.press('Control+q');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('FileEditor') and not browser_app.query_one('Shell')._busy"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('FileEditor') and not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').has_focus"));
     await page.keyboard.type('edit created.txt');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('FileEditor')) and browser_app.query_one('FileEditor').query_one('TextArea').has_focus"));
@@ -119,7 +121,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.keyboard.press('Control+q');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('FileEditor')._confirming_close"));
     await page.keyboard.press('Control+q');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('FileEditor') and not browser_app.query_one('Shell')._busy"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('FileEditor') and not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').has_focus"));
     assert.equal(await python("session.filesystem.read_text('/created.txt')"), 'edited in the browser');
     await command('mkdir empty');
     await command('rmdir empty');
@@ -136,17 +138,17 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
       "bool(browser_app.query('Pager')) and browser_app.query_one('Pager').loaded and browser_app.query_one('Pager').has_focus and [line.text.strip() for line in browser_app.query_one('PagerLog').lines] == ['pear', 'apple', 'banana', 'apricot']"));
     assert.equal(await python("any('apple' in line.text for line in browser_app.query_one('PagerLog').lines)"), true);
     await page.keyboard.press('q');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('Pager') and not browser_app.query_one('Shell')._busy"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('Pager') and not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').has_focus"));
     await python("session.filesystem.write_text('/pager.txt', '\\n'.join(f'line {i}' for i in range(120)))");
     await page.keyboard.type('more pager.txt');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('Pager')) and browser_app.query_one('Pager').loaded"));
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('PagerLog').max_scroll_y > 0 and browser_app.query_one('Pager').has_focus"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('PagerLog').max_scroll_y > 0 and browser_app.query_one('PagerLog').scrollable_content_region.height > 0 and len(browser_app.query_one('PagerLog').lines) == 120 and browser_app.query_one('Pager').has_focus"));
     await page.keyboard.press('Space');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('PagerLog').scroll_y > 0"));
     await page.screenshot({path: path.join(root, `.cache/browser-pager-${promptPosition}.png`)});
     await page.keyboard.press('Control+q');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('Pager') and not browser_app.query_one('Shell')._busy"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('Pager') and not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').has_focus"));
     await page.keyboard.type('cat pager.txt | less');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('Pager')) and browser_app.query_one('Pager').loaded and browser_app.query_one('PagerLog').max_scroll_y > 0"));
@@ -162,7 +164,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('Pager')._match_line == 30"));
     await page.screenshot({path: path.join(root, `.cache/browser-less-${promptPosition}.png`)});
     await page.keyboard.press('Control+q');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('Pager') and not browser_app.query_one('Shell')._busy"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('Pager') and not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').has_focus"));
     await command("find notes -name '*.txt' -type f | select path");
     assert.equal(await python("session.last_status == 0 and [e.value for e in browser_app.query_one('Shell').output if e.kind == 'output'][-1] == 'notes/fruits.txt'"), true);
     await command('find notes -maxdepth 0');

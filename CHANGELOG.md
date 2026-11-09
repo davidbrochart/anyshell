@@ -5,6 +5,8 @@
 - Process file-editor shortcuts in input order so saving includes preceding edits
   and closing the editor does not fall through to the application quit binding.
 - Wait for rendered pager content in browser regression tests.
+- Advertise pager readiness after rendering, wait for deferred focus and scroll
+  updates in UI tests, and retain browser failure screenshots in CI.
 
 ## 0.1.0 — 2026-11-09
 

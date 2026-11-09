@@ -52,6 +52,7 @@ async def test_edit_save_existing_and_new_file(filesystem):
         await wait_until(lambda: not app.query_one(Shell)._busy)
         assert session.last_status == 0
         assert app.is_running
+        await wait_until(lambda: app.query_one(CommandInput).has_focus)
         assert app.query_one(CommandInput).has_focus
         screen = await start_editor(app, pilot, "edit new.txt")
         assert screen.query_one(TextArea).text == ""
@@ -211,6 +212,7 @@ async def test_editor_fills_only_embedded_shell_and_restores_transcript(
         assert shell.query_one("#shell-terminal").display
         assert transcript is shell.query_one(RichLog)
         assert any("previous output" in line.text for line in transcript.lines)
+        await wait_until(lambda: shell.query_one(CommandInput).has_focus)
         assert shell.query_one(CommandInput).has_focus
 
 
@@ -263,5 +265,6 @@ async def test_editor_orders_typing_save_and_close_without_quitting_app():
         await wait_until(lambda: not app.query_one(Shell)._busy)
         assert app.is_running
         assert not app.query(FileEditor)
+        await wait_until(lambda: app.query_one(CommandInput).has_focus)
         assert app.query_one(CommandInput).has_focus
         assert fs.read_text("/test.txt") == "saved"

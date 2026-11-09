@@ -29,7 +29,7 @@ async def open_pager(app, pilot, source):
     await wait_until(lambda: bool(app.query(Pager)))
     pager = app.query_one(Pager)
     await wait_until(lambda: pager.loaded or pager.error is not None)
-    await pilot.pause()
+    assert pager.query_one(PagerLog).scrollable_content_region.height > 0
     return pager
 
 

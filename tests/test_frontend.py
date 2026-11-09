@@ -109,6 +109,7 @@ async def test_inline_prompt_geometry_scrolling_and_clear():
         await wait_until(lambda: not shell._busy)
         await pilot.pause()
         assert not transcript.lines
+        await wait_until(lambda: command_input.region.y == viewport.content_region.y)
         assert command_input.region.y == viewport.content_region.y
 
 
@@ -157,7 +158,9 @@ async def test_inline_scrollback_stays_put_until_command_finishes():
         assert command_input.region.y > viewport.content_region.bottom
         finish.set()
         await wait_until(lambda: not shell._busy)
-        await pilot.pause()
+        await wait_until(
+            lambda: command_input.region.bottom <= viewport.content_region.bottom
+        )
         assert command_input.region.bottom <= viewport.content_region.bottom
 
 

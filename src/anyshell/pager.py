@@ -83,6 +83,12 @@ class Pager(Vertical, can_focus=True):
             self.error = error
             self.closed.set()
         else:
+            # EOF can arrive before RichLog has its first layout. Only advertise
+            # readiness after the frame that lays out and renders the content.
+            self.call_after_refresh(self._mark_loaded)
+
+    def _mark_loaded(self) -> None:
+        if self.is_mounted:
             self.loaded = True
 
     def action_next_page(self) -> None:
