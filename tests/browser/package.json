@@ -1,0 +1,10 @@
+{
+  "name": "anyshell-browser-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test shell.test.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Anyshell · Browser demo</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #101218; color: #e4e9f0; font: 15px system-ui, sans-serif; }
+      main { height: 100dvh; display: flex; flex-direction: column; padding: 20px; gap: 14px; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+      h1 { margin: 0; font-size: 22px; font-weight: 650; }
+      p { margin: 5px 0 0; color: #a9b3c4; }
+      .controls { display: flex; align-items: center; gap: 8px; }
+      button, select { color: inherit; background: #252b39; border: 1px solid #46516a; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+      #status { color: #a9c6ff; min-height: 20px; }
+      #terminal { flex: 1; min-height: 180px; padding: 12px; background: #0c0e14; border: 1px solid #343d50; border-radius: 8px; overflow: hidden; }
+      #error { white-space: pre-wrap; overflow: auto; color: #ffb4b4; margin: 0; max-height: 30vh; }
+      footer { color: #a9b3c4; font-size: 13px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><h1>Anyshell</h1><p>A Python shell running entirely in your browser.</p></div>
+        <div class="controls"><label for="prompt-position">Prompt</label><select id="prompt-position"><option value="inline">Inline</option><option value="bottom">Bottom</option></select><button id="reload" type="button">Reload</button></div>
+      </header>
+      <div id="status" role="status">Loading Python…</div>
+      <div id="terminal" aria-label="Anyshell terminal"></div>
+      <pre id="error" role="alert" hidden></pre>
+      <footer>Try help, cat readme.txt, or ls | select name | sort. Tab completes; Up/Down recalls history. Ctrl+C cancels; Ctrl+Q quits. Files reset on reload.</footer>
+    </main>
+    <script type="module" src="browser.js"></script>
+  </body>
+</html>

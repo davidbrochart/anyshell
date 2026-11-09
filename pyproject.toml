@@ -1,0 +1,42 @@
+[project]
+name = "anyshell"
+version = "0.1.0"
+description = "An async Python command shell with an optional Anytext frontend"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "David Brochart", email = "david.brochart@gmail.com"}]
+dependencies = [
+    "anyio>=4.11,<5",
+    "cyclopts>=5.4,<6",
+]
+
+[project.optional-dependencies]
+anytext = ["anytext>=9.1,<10"]
+trio = ["trio>=0.31"]
+
+[project.scripts]
+anyshell = "anyshell.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff==0.17.4", "trio>=0.31", "anytext>=9.1,<10", "uv_build>=0.13.5,<0.14"]
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-include = ["tests/**", "tools/**", "examples/**"]
+source-exclude = ["node_modules", "test-results"]
+
+[tool.pytest.ini_options]
+anyio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--strict-markers"
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
