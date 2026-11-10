@@ -53,6 +53,7 @@ Emitter = Callable[[Event], Awaitable[None]]
 class Context:
     session: Session
     emit: Emitter
+    output_width: int = 88
 
     @property
     def fs(self) -> FileSystem:
@@ -86,9 +87,9 @@ class Command:
         parser.default(self.run)
         object.__setattr__(self, "_parser", parser)
 
-    def prepare(self, arguments: list[str]) -> _Invocation:
+    def prepare(self, arguments: list[str], *, width: int = 88) -> _Invocation:
         output = StringIO()
-        console = Console(file=output, width=88, color_system=None)
+        console = Console(file=output, width=width, color_system=None)
         try:
             callback, bound, ignored = self._parser.parse_args(
                 arguments,
@@ -121,10 +122,10 @@ class Command:
                 names.update(argument.names)
         return sorted(name for name in names if name.startswith("-"))
 
-    def help_text(self) -> str:
+    def help_text(self, *, width: int = 88) -> str:
         output = StringIO()
         self._parser.help_print(
-            console=Console(file=output, width=88, color_system=None)
+            console=Console(file=output, width=width, color_system=None)
         )
         return output.getvalue().rstrip()
 
@@ -291,7 +292,11 @@ class Session:
         self._scope.cancel()
         return True
 
-    async def execute(self, source: str, emit: Emitter) -> Result:
+    async def execute(
+        self, source: str, emit: Emitter, *, output_width: int = 88
+    ) -> Result:
+        if output_width < 1:
+            raise ValueError("output_width must be positive")
         if self.running:
             raise ShellError("this session is already running a command")
         source = source.strip() if "\n" not in source else source
@@ -299,11 +304,13 @@ class Session:
             return Result(0)
         self._executing = True
         try:
-            return await self._execute(source, emit)
+            return await self._execute(source, emit, output_width=output_width)
         finally:
             self._executing = False
 
-    async def _execute(self, source: str, emit: Emitter) -> Result:
+    async def _execute(
+        self, source: str, emit: Emitter, *, output_width: int
+    ) -> Result:
         if not self.history or self.history[-1] != source:
             self.history.append(source)
         status = 0
@@ -318,7 +325,7 @@ class Session:
                         if stage[0] not in self.commands:
                             raise ShellError(f"command not found: {stage[0]}")
                         command = self.commands[stage[0]]
-                        invocation = command.prepare(stage[1:])
+                        invocation = command.prepare(stage[1:], width=output_width)
                         if (
                             len(stages) > 1
                             and command.standalone
@@ -330,7 +337,9 @@ class Session:
                         commands.append(invocation)
                     pipelines.append(commands)
                 for commands in pipelines:
-                    status = await self._pipeline(commands, emit)
+                    status = await self._pipeline(
+                        commands, emit, output_width=output_width
+                    )
             except (ShellError, OSError, ValueError) as error:
                 status = 1
                 await emit(Event("error", str(error)))
@@ -343,13 +352,15 @@ class Session:
         await emit(Event("status", self.last_status))
         return Result(self.last_status, cancelled)
 
-    async def _pipeline(self, commands, emit: Emitter) -> int:
+    async def _pipeline(
+        self, commands, emit: Emitter, *, output_width: int = 88
+    ) -> int:
         streams = [
             anyio.create_memory_object_stream[Any](16) for _ in range(len(commands) + 1)
         ]
         await streams[0][0].aclose()  # First stage gets EOF on standard input.
         statuses = [0] * len(commands)
-        context = Context(self, emit)
+        context = Context(self, emit, output_width=output_width)
 
         async def run_stage(index: int) -> None:
             receive = streams[index][1]

@@ -16,15 +16,19 @@ const proxies = [];
 try {
   const terminal = new Terminal({ cursorBlink: true, fontSize: 15,
     fontFamily: "ui-monospace, monospace", allowProposedApi: true,
-    theme: { background: "#0c0e14" } });
+    customGlyphs: true, scrollback: 0, theme: { background: "#0c0e14" } });
   terminal.loadAddon(new Unicode11Addon.Unicode11Addon());
   terminal.unicode.activeVersion = "11";
   const fit = new FitAddon.FitAddon();
   terminal.loadAddon(fit);
-  terminal.open(document.querySelector("#terminal"));
+  // Fit against an unpadded inner element, not the bordered outer container.
+  const terminalScreen = document.querySelector("#terminal-screen");
+  terminal.open(terminalScreen);
+  // Draw block and box glyphs as shapes so font metrics cannot leave row seams.
+  terminal.loadAddon(new CanvasAddon.CanvasAddon());
   fit.fit();
   observer = new ResizeObserver(() => fit.fit());
-  observer.observe(document.querySelector("#terminal"));
+  observer.observe(terminalScreen);
   const { loadPyodide } = await import("https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.mjs");
   const pyodide = await loadPyodide();
   window.anyshellDemo = { pyodide, terminal };
@@ -43,7 +47,7 @@ try {
   pyodide.globals.set("browser_ready", () => {
     ready = true;
     resize(terminal.cols, terminal.rows);
-    status.textContent = "Running · Python commands · No threads";
+    status.textContent = "Running";
     terminal.focus();
   });
   const source = await fetch("app.py", { cache: "no-store" });

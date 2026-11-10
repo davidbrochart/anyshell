@@ -53,7 +53,7 @@ class BrowserShell(ShellApp):
 session = Session(
     MemoryFileSystem(
         {
-            "readme.txt": "Welcome to Anyshell!\nEvery command runs in Python.\nTry help or ls | select name | sort.\n",
+            "readme.txt": "Welcome to anyshell!\n",
             "notes/fruits.txt": "pear\napple\nbanana\napricot\n",
         }
     )

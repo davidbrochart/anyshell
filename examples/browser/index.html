@@ -15,13 +15,15 @@
       .controls { display: flex; align-items: center; gap: 8px; }
       button, select { color: inherit; background: #252b39; border: 1px solid #46516a; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
       #status { color: #a9c6ff; min-height: 20px; }
-      #terminal { flex: 1; min-height: 180px; padding: 12px; background: #0c0e14; border: 1px solid #343d50; border-radius: 8px; overflow: hidden; }
+      header, #status { flex-shrink: 0; }
+      #terminal { display: flex; flex: 1; min-height: 0; padding: 12px; background: #0c0e14; border: 1px solid #343d50; border-radius: 8px; overflow: hidden; }
+      #terminal-screen { flex: 1; min-width: 0; min-height: 0; }
       #error { white-space: pre-wrap; overflow: auto; color: #ffb4b4; margin: 0; max-height: 30vh; }
-      footer { color: #a9b3c4; font-size: 13px; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.js"></script>
   </head>
   <body>
     <main>
@@ -30,9 +32,8 @@
         <div class="controls"><label for="prompt-position">Prompt</label><select id="prompt-position"><option value="inline">Inline</option><option value="bottom">Bottom</option></select><button id="reload" type="button">Reload</button></div>
       </header>
       <div id="status" role="status">Loading Python…</div>
-      <div id="terminal" aria-label="Anyshell terminal"></div>
+      <div id="terminal" aria-label="Anyshell terminal"><div id="terminal-screen"></div></div>
       <pre id="error" role="alert" hidden></pre>
-      <footer>Try help, cat readme.txt, or ls | select name | sort. Tab completes; Up/Down recalls history. Ctrl+C cancels; Ctrl+Q quits. Files reset on reload.</footer>
     </main>
     <script type="module" src="browser.js"></script>
   </body>

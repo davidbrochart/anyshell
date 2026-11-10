@@ -229,6 +229,9 @@ async def main():
 anyio.run(main)
 ```
 
+Help uses the current transcript or terminal width. Engine callers can set
+`Session.execute(..., output_width=100)` when supplying their own frontend.
+
 Commands use Cyclopts to parse typed Python parameters. `--help` (or `-h`)
 and `help COMMAND` write help to the transcript. Invalid arguments produce shell
 errors without exiting the app. All pipeline arguments are validated before any

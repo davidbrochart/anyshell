@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Highlight regex search matches in `less`.
+
+- Remove the filename header from `more` and `less`.
+
+- Render transcript and pager text at their available width instead of letting
+  Rich measurement wrap wide output at the process console width.
+
+- Format command help at the current output width instead of a fixed 88 columns,
+  including `-h`, `--help`, and `help COMMAND`.
+
+- Disable xterm scrollback so the browser terminal does not reserve an unused
+  scrollbar gutter; Anyshell retains its own scrollback.
+
+- Use canvas rendering for continuous browser terminal borders and block glyphs
+  at different display scales.
+
+- Fit the browser terminal inside its padding and border so the footer remains
+  fully visible, including in compact viewports.
+
 - Process file-editor shortcuts in input order so saving includes preceding edits
   and closing the editor does not fall through to the application quit binding.
 - Wait for rendered pager content in browser regression tests.

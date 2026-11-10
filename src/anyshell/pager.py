@@ -8,7 +8,11 @@ from anytext.app import ComposeResult
 from anytext.binding import Binding
 from anytext.containers import Horizontal, Vertical
 from anytext.reactive import var
+from anytext.strip import Strip
 from anytext.widgets import Input, RichLog, Static
+from rich.cells import cell_len
+from rich.measure import Measurement
+from rich.style import Style
 from rich.text import Text
 
 from .engine import PageRequest
@@ -16,6 +20,48 @@ from .engine import PageRequest
 
 class PagerLog(RichLog, can_focus=False):
     """Keep keyboard focus on the pager and expose mouse scrolling."""
+
+    search_pattern: re.Pattern[str] | None = None
+
+    def _render_line(self, y: int, scroll_x: int, width: int) -> Strip:
+        line = super()._render_line(y, scroll_x, width)
+        if self.search_pattern is None or y >= len(self.lines):
+            return line
+        text = self.lines[y].text
+        parts = []
+        end = 0
+        for match in self.search_pattern.finditer(text):
+            start = max(0, cell_len(text[: match.start()]) - scroll_x)
+            stop = min(width, cell_len(text[: match.end()]) - scroll_x)
+            if stop <= start:
+                continue
+            parts.append(line.crop(end, start))
+            parts.append(
+                line.crop(start, stop).apply_style(Style(reverse=True, bold=True))
+            )
+            end = stop
+        if not parts:
+            return line
+        parts.append(line.crop(end, width))
+        return Strip.join(parts)
+
+    def write(
+        self,
+        content,
+        width=None,
+        expand=False,
+        shrink=True,
+        scroll_end=None,
+        animate=False,
+    ):
+        available = self.scrollable_content_region.width
+        if width is None and not expand and shrink and available > 0:
+            # Measure against the widget, rather than Rich's process-console width.
+            # Keep short lines unpadded so regex end anchors retain their meaning.
+            console = self.app.console
+            options = console.options.update_width(available)
+            width = max(1, Measurement.get(console, options, content).maximum)
+        return super().write(content, width, expand, shrink, scroll_end, animate)
 
 
 class PagerSearchInput(Input):
@@ -42,7 +88,6 @@ class Pager(Vertical, can_focus=True):
 
     DEFAULT_CSS = """
     Pager { width: 1fr; height: 1fr; background: $surface; }
-    Pager #pager-title { height: 1; padding: 0 1; }
     Pager #pager-search-row { display: none; height: 1; }
     Pager #pager-search-direction { width: 1; }
     Pager PagerSearchInput, Pager PagerSearchInput:focus {
@@ -50,6 +95,7 @@ class Pager(Vertical, can_focus=True):
     }
     Pager PagerLog {
         height: 1fr; min-height: 0; padding: 0 1; overflow: auto auto;
+        scrollbar-gutter: stable;
     }
     """
 
@@ -64,7 +110,6 @@ class Pager(Vertical, can_focus=True):
         self._match_line: int | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static(Text(self.request.title), id="pager-title")
         yield PagerLog(wrap=True, markup=False, min_width=1, auto_scroll=False)
         with Horizontal(id="pager-search-row"):
             yield Static("/", id="pager-search-direction")
@@ -174,6 +219,9 @@ class Pager(Vertical, can_focus=True):
                     str(error), title="Invalid search", severity="error", markup=False
                 )
                 return
+        log = self.query_one(PagerLog)
+        log.search_pattern = self._pattern
+        log.refresh()
         self._match_line = None
         self.action_cancel_search()
         if self._pattern is not None:
@@ -194,11 +242,6 @@ class Pager(Vertical, can_focus=True):
                 if self._pattern.search(log.lines[index].text):
                     self._match_line = index
                     log.scroll_to(y=index, animate=False, immediate=True)
-                    self.query_one("#pager-title", Static).update(
-                        Text(
-                            f"{self.request.title} · {self._pattern.pattern} · line {index + 1}"
-                        )
-                    )
                     return
         self.app.notify("Pattern not found", title="Search", markup=False)
 
