@@ -229,6 +229,9 @@ async def main():
 anyio.run(main)
 ```
 
+Help uses the current transcript or terminal width. Engine callers can set
+`Session.execute(..., output_width=100)` when supplying their own frontend.
+
 Commands use Cyclopts to parse typed Python parameters. `--help` (or `-h`)
 and `help COMMAND` write help to the transcript. Invalid arguments produce shell
 errors without exiting the app. All pipeline arguments are validated before any
@@ -270,6 +273,12 @@ For the frontend, import `Shell` from `anyshell.frontend` and yield
 session, so the engine and UI can evolve independently.
 
 ## Browser demo
+
+The deployment workflow publishes the demo to https://davidbrochart.github.io/anyshell/.
+GitHub Actions builds and deploys it from `main` using
+`.github/workflows/pages.yml`; it can also be deployed manually from Actions.
+
+To run it locally:
 
 ```sh
 uv run python tools/build_browser.py

@@ -298,3 +298,38 @@ async def test_completion_expands_shared_prefix_before_opening_menu(prompt_posit
         await pilot.press("down", "enter")
         assert editor.value == "ls abc0"
         assert not shell.session.history
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_help_fits_transcript_width_after_resize(prompt_position):
+    from anytext.widgets import RichLog
+
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test(size=(60, 24)) as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        for width, source in ((60, "ls -h"), (140, "help ls"), (70, "ls --help")):
+            await pilot.resize_terminal(width, 24)
+            await pilot.pause()
+            editor.value = "clear"
+            await pilot.press("enter")
+            await wait_until(lambda: not shell._busy)
+            await pilot.pause()
+            transcript = app.query_one(RichLog)
+            available = transcript.scrollable_content_region.width
+            editor.value = source
+            await pilot.press("enter")
+            await wait_until(lambda: not shell._busy)
+            lines = [e.value for e in shell.output if e.kind == "output"]
+            assert max(map(len, lines)) == available
+            assert all(len(line) <= available for line in lines)
+            assert transcript.scrollable_content_region.width == available
+            await wait_until(
+                lambda: any("--long" in line.text for line in transcript.lines)
+            )
+            expected = [line.rstrip() for line in lines if line.strip()]
+            rendered = [
+                line.text.rstrip() for line in transcript.lines if line.text.strip()
+            ]
+            assert rendered[1:] == expected
+            assert "--long" in "\n".join(rendered)

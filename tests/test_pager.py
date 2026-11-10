@@ -29,6 +29,7 @@ async def open_pager(app, pilot, source):
     await wait_until(lambda: bool(app.query(Pager)))
     pager = app.query_one(Pager)
     await wait_until(lambda: pager.loaded or pager.error is not None)
+    await wait_until(lambda: pager.has_focus)
     assert pager.query_one(PagerLog).scrollable_content_region.height > 0
     return pager
 
@@ -50,17 +51,17 @@ async def test_more_files_navigation_and_restoration(filesystem, prompt_position
         assert log.lines[120].text.strip() == "[red] literal"
         assert session.running
         await pilot.press("space")
-        assert log.scroll_y > 0
+        await wait_until(lambda: log.scroll_y > 0)
         await pilot.press("b")
-        assert log.scroll_y == 0
+        await wait_until(lambda: log.scroll_y == 0)
         await pilot.press("enter")
         assert log.scroll_y == 1
         await pilot.press("up")
         assert log.scroll_y == 0
         await pilot.press("end")
-        assert log.is_vertical_scroll_end
+        await wait_until(lambda: log.is_vertical_scroll_end)
         await pilot.press("home")
-        assert log.scroll_y == 0
+        await wait_until(lambda: log.scroll_y == 0)
         await pilot.press("q")
         await wait_until(lambda: not shell._busy)
         assert not app.query(Pager)
@@ -223,3 +224,54 @@ async def test_less_pipeline_and_search_errors(filesystem, monkeypatch):
         await pilot.press("ctrl+q")
         await wait_until(lambda: not app.query_one(Shell)._busy)
         assert app.query_one(Shell).session.last_status == 0
+
+
+async def test_wide_pager_lines_use_viewport_and_preserve_search_anchors():
+    from anyshell.pager import PagerSearchInput
+
+    text = "needle" + "x" * 100
+    app = ShellApp(Session(MemoryFileSystem({"wide.txt": text})))
+    async with app.run_test(size=(140, 24)) as pilot:
+        pager = await open_pager(app, pilot, "less wide.txt")
+        log = pager.query_one(PagerLog)
+        assert log.scrollable_content_region.width > len(text)
+        assert len(log.lines) == 1
+        assert log.lines[0].text == text
+        await pilot.press("slash")
+        pager.query_one(PagerSearchInput).value = "^" + text + "$"
+        await pilot.press("enter")
+        assert pager._match_line == 0
+        await pilot.press("q")
+        await wait_until(lambda: not app.query_one(Shell)._busy)
+
+
+async def test_less_highlights_all_matches_and_replaces_search():
+    from anyshell.pager import PagerSearchInput
+
+    app = ShellApp(Session(MemoryFileSystem({"matches.txt": "界 cat cat dog"})))
+    async with app.run_test(size=(60, 20)) as pilot:
+        pager = await open_pager(app, pilot, "less matches.txt")
+        log = pager.query_one(PagerLog)
+
+        async def search(pattern):
+            await pilot.press("slash")
+            pager.query_one(PagerSearchInput).value = pattern
+            await pilot.press("enter")
+
+        def highlighted(scroll_x=0):
+            strip = log._render_line(0, scroll_x, 40)
+            return "".join(
+                segment.text
+                for segment in strip
+                if segment.style and segment.style.reverse
+            )
+
+        await search("cat")
+        assert highlighted() == "catcat"
+        assert highlighted(4) == "atcat"
+        await search("dog")
+        assert highlighted() == "dog"
+        await search("missing")
+        assert highlighted() == ""
+        await pilot.press("q")
+        await wait_until(lambda: not app.query_one(Shell)._busy)

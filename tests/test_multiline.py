@@ -83,6 +83,9 @@ async def test_enter_continues_incomplete_command(prompt_position, start, end, o
         await pilot.press("enter")
         assert editor.value == start + "\n"
         assert not session.history
+        with anyio.fail_after(5):
+            while editor.size.height < 2:
+                await anyio.sleep(0.01)
         assert editor.size.height >= 2
         editor.value += end
         await pilot.press("enter")
@@ -92,7 +95,12 @@ async def test_enter_continues_incomplete_command(prompt_position, start, end, o
         shell = app.query_one(Shell)
         assert [e.value for e in shell.output if e.kind == "output"] == [output]
         assert session.history == [start + "\n" + end]
-        assert editor.value == "" and editor.size.height == 1
+        assert editor.value == ""
+        # Command completion precedes the layout pass that shrinks the input.
+        with anyio.fail_after(5):
+            while editor.size.height != 1:
+                await anyio.sleep(0.01)
+        assert editor.size.height == 1
         await pilot.press("up")
         assert editor.value == session.history[0]
         await pilot.press("alt+down")

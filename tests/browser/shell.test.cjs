@@ -35,6 +35,20 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
       "bool(browser_app.query('CommandInput')) and browser_app.query_one('CommandInput').has_focus"));
     assert.equal(await python("browser_app.query_one('Shell').prompt_position"), promptPosition);
+    for (const viewport of [{width: 390, height: 640}, {width: 800, height: 400}, {width: 390, height: 420}, {width: 1100, height: 760}]) {
+      await page.setViewportSize(viewport);
+      await page.waitForFunction(() => {
+        const terminal = window.anyshellDemo.terminal;
+        const host = document.querySelector('#terminal-screen').getBoundingClientRect();
+        const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
+        const cellHeight = screen.height / terminal.rows;
+        return screen.height > 0 && screen.bottom <= host.bottom + 0.5 &&
+          screen.right <= host.right + 0.5 && host.width - screen.width < screen.width / terminal.cols + 0.5 &&
+          terminal.rows === Math.floor(host.height / cellHeight + 0.001) &&
+          window.anyshellDemo.pyodide.runPython(`browser_app.size.height == ${terminal.rows} and browser_app.size.width == ${terminal.cols}`) &&
+          terminal.buffer.active.getLine(terminal.buffer.active.baseY + terminal.rows - 1)?.translateToString().includes('Quit');
+      });
+    }
     await page.keyboard.type('cat notes/fruits.txt | grep ^a | sort | count');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
@@ -104,7 +118,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     assert.equal(await python("session.filesystem.stat('/created.txt')['size']"), 0);
     await page.keyboard.type('edit created.txt');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('FileEditor'))"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('FileEditor')) and browser_app.query_one('FileEditor').query_one('TextArea').has_focus"));
     await page.keyboard.type('edited in the browser');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('FileEditor').query_one('TextArea').text == 'edited in the browser'"));
     await page.keyboard.press('Control+s');

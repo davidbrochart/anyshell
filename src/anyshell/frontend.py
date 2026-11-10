@@ -168,7 +168,7 @@ class Transcript(RichLog, can_focus=False):
         self,
         content,
         width=None,
-        expand=False,
+        expand=True,
         shrink=True,
         scroll_end=None,
         animate=False,
@@ -217,6 +217,7 @@ class Shell(Vertical):
     Shell { height: 1fr; border: round $primary; }
     Shell #shell-terminal { height: 1fr; }
     Shell RichLog { height: 1fr; padding: 0 1; }
+    Shell.bottom-prompt Transcript { scrollbar-gutter: stable; }
     Shell #command-line { height: 3; }
     Shell #prompt { width: auto; padding: 1 0 0 1; }
     Shell CommandInput, Shell CommandInput:focus {
@@ -246,6 +247,7 @@ class Shell(Vertical):
         super().__init__(**kwargs)
         self._prompt_position = prompt_position
         self.set_class(prompt_position == "inline", "inline-prompt")
+        self.set_class(prompt_position == "bottom", "bottom-prompt")
         self._prompt_scroll_pending = False
         self.session = session if session is not None else Session()
         self._history_index = len(self.session.history)
@@ -330,7 +332,8 @@ class Shell(Vertical):
 
     async def _execute(self, source: str) -> None:
         try:
-            await self.session.execute(source, self.receive)
+            width = max(1, self.query_one(RichLog).scrollable_content_region.width)
+            await self.session.execute(source, self.receive, output_width=width)
         finally:
             self._busy = False
             self._history_index = len(self.session.history)

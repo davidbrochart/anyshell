@@ -40,7 +40,9 @@ async def help_command(command: str | None = None, *, ctx: Context, stdout):
     if command is not None:
         if command not in ctx.session.commands:
             raise ShellError(f"command not found: {command}")
-        for line in ctx.session.commands[command].help_text().splitlines():
+        for line in (
+            ctx.session.commands[command].help_text(width=ctx.output_width).splitlines()
+        ):
             await stdout.send(line)
     else:
         for name, entry in sorted(ctx.session.commands.items()):

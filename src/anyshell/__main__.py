@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from shutil import get_terminal_size
 
 import anyio
 
@@ -54,7 +55,11 @@ def main() -> None:
                 )
 
         async def execute() -> int:
-            return (await session.execute(args.command, emit)).status
+            return (
+                await session.execute(
+                    args.command, emit, output_width=get_terminal_size((88, 24)).columns
+                )
+            ).status
 
         try:
             status = anyio.run(execute, backend=args.backend)

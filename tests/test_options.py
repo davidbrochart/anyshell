@@ -10,13 +10,13 @@ from cyclopts import Parameter
 from anyshell import Command, Context, LocalFileSystem, MemoryFileSystem, Session
 
 
-async def execute(session, source):
+async def execute(session, source, **kwargs):
     events = []
 
     async def emit(event):
         events.append(event)
 
-    result = await session.execute(source, emit)
+    result = await session.execute(source, emit, **kwargs)
     return result, [e.value for e in events if e.kind == "output"], events
 
 
@@ -183,3 +183,35 @@ async def test_listing_explicit_file_paths(filesystem):
         result, rows, events = await execute(session, f"ls {flag} /missing.txt")
         assert result.status == 1 and rows == []
         assert any(event.kind == "error" for event in events)
+
+
+@pytest.mark.parametrize("width", [40, 70, 120])
+@pytest.mark.parametrize("source", ["ls -h", "ls --help", "help ls"])
+async def test_help_uses_requested_output_width(source, width):
+    result, lines, _ = await execute(Session(), source, output_width=width)
+    assert result.status == 0
+    assert max(map(len, lines)) == width
+    assert all(len(line) <= width for line in lines)
+    assert "--long" in "\n".join(lines)
+
+
+async def test_output_width_must_be_positive():
+    session = Session()
+    for width in (0, -1):
+        with pytest.raises(ValueError, match="output_width must be positive"):
+            await execute(session, "ls -h", output_width=width)
+    assert not session.running and not session.history
+
+
+def test_headless_help_uses_terminal_columns(tmp_path):
+    import os
+
+    result = subprocess.run(
+        [sys.executable, "-m", "anyshell", "--root", str(tmp_path), "-c", "ls -h"],
+        env={**os.environ, "COLUMNS": "60", "PYTHONIOENCODING": "utf-8"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stderr
+    assert max(map(len, result.stdout.splitlines())) == 60
