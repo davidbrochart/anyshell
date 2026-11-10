@@ -92,6 +92,29 @@ async def test_more_pipeline_structured_values_and_empty_input(filesystem):
         await wait_until(lambda: not app.query_one(Shell)._busy)
 
 
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_pager_navigation_without_another_refresh(filesystem, prompt_position):
+    app = ShellApp(Session(filesystem), prompt_position=prompt_position)
+    async with app.run_test(size=(70, 20)) as pilot:
+        pager = await open_pager(app, pilot, "more long.txt")
+        log = pager.query_one(PagerLog)
+        page_height = log.scrollable_content_region.height
+        # No event-loop checkpoint: each action must update the viewport itself,
+        # even when the screen is idle or several keys arrive in one frame.
+        pager.action_next_page()
+        assert log.scroll_y == page_height
+        pager.action_next_page()
+        assert log.scroll_y == 2 * page_height
+        pager.action_previous_page()
+        assert log.scroll_y == page_height
+        pager.action_last_page()
+        assert log.is_vertical_scroll_end
+        pager.action_first_page()
+        assert log.scroll_y == 0
+        await pilot.press("q")
+        await wait_until(lambda: not app.query_one(Shell)._busy)
+
+
 async def test_more_reports_read_errors(filesystem):
     app = ShellApp(Session(filesystem))
     async with app.run_test() as pilot:

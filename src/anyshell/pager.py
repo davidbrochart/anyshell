@@ -138,11 +138,22 @@ class Pager(Vertical, can_focus=True):
 
     def action_next_page(self) -> None:
         self._match_line = None
-        self.query_one(PagerLog).scroll_page_down(animate=False)
+        log = self.query_one(PagerLog)
+        # Keyboard navigation must not wait for an unrelated screen refresh.
+        log.scroll_to(
+            y=log.scroll_y + log.scrollable_content_region.height,
+            animate=False,
+            immediate=True,
+        )
 
     def action_previous_page(self) -> None:
         self._match_line = None
-        self.query_one(PagerLog).scroll_page_up(animate=False)
+        log = self.query_one(PagerLog)
+        log.scroll_to(
+            y=log.scroll_y - log.scrollable_content_region.height,
+            animate=False,
+            immediate=True,
+        )
 
     def action_next_line(self) -> None:
         self._match_line = None
@@ -156,11 +167,11 @@ class Pager(Vertical, can_focus=True):
 
     def action_first_page(self) -> None:
         self._match_line = None
-        self.query_one(PagerLog).scroll_home(animate=False)
+        self.query_one(PagerLog).scroll_home(animate=False, immediate=True)
 
     def action_last_page(self) -> None:
         self._match_line = None
-        self.query_one(PagerLog).scroll_end(animate=False)
+        self.query_one(PagerLog).scroll_end(animate=False, immediate=True)
 
     def action_close_pager(self) -> None:
         self.closed.set()
