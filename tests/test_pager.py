@@ -29,6 +29,7 @@ async def open_pager(app, pilot, source):
     await wait_until(lambda: bool(app.query(Pager)))
     pager = app.query_one(Pager)
     await wait_until(lambda: pager.loaded or pager.error is not None)
+    await wait_until(lambda: pager.has_focus)
     assert pager.query_one(PagerLog).scrollable_content_region.height > 0
     return pager
 
@@ -50,17 +51,17 @@ async def test_more_files_navigation_and_restoration(filesystem, prompt_position
         assert log.lines[120].text.strip() == "[red] literal"
         assert session.running
         await pilot.press("space")
-        assert log.scroll_y > 0
+        await wait_until(lambda: log.scroll_y > 0)
         await pilot.press("b")
-        assert log.scroll_y == 0
+        await wait_until(lambda: log.scroll_y == 0)
         await pilot.press("enter")
         assert log.scroll_y == 1
         await pilot.press("up")
         assert log.scroll_y == 0
         await pilot.press("end")
-        assert log.is_vertical_scroll_end
+        await wait_until(lambda: log.is_vertical_scroll_end)
         await pilot.press("home")
-        assert log.scroll_y == 0
+        await wait_until(lambda: log.scroll_y == 0)
         await pilot.press("q")
         await wait_until(lambda: not shell._busy)
         assert not app.query(Pager)

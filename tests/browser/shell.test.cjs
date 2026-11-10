@@ -118,7 +118,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     assert.equal(await python("session.filesystem.stat('/created.txt')['size']"), 0);
     await page.keyboard.type('edit created.txt');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('FileEditor'))"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('FileEditor')) and browser_app.query_one('FileEditor').query_one('TextArea').has_focus"));
     await page.keyboard.type('edited in the browser');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('FileEditor').query_one('TextArea').text == 'edited in the browser'"));
     await page.keyboard.press('Control+s');
