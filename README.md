@@ -274,6 +274,12 @@ session, so the engine and UI can evolve independently.
 
 ## Browser demo
 
+The deployment workflow publishes the demo to https://davidbrochart.github.io/anyshell/.
+GitHub Actions builds and deploys it from `main` using
+`.github/workflows/pages.yml`; it can also be deployed manually from Actions.
+
+To run it locally:
+
 ```sh
 uv run python tools/build_browser.py
 uv run python -m http.server --directory .cache/browser-site 8000
