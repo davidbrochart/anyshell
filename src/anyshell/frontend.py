@@ -104,6 +104,12 @@ class CommandInput(TextArea):
     def on_resize(self) -> None:
         self.call_after_refresh(self.resize_editor)
 
+    def render_lines(self, crop):
+        if self.has_focus:
+            # Paint happens after layout, even when cached lines are reused.
+            self.app.cursor_position = self.cursor_screen_offset
+        return super().render_lines(crop)
+
     @property
     def shell(self) -> Shell:
         return self.query_ancestor(Shell)

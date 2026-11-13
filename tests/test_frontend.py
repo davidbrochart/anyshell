@@ -363,7 +363,7 @@ async def test_foreground_hides_prompt_until_completion_or_cancellation(
         from anyshell.frontend import RunningCursor
 
         cursor = shell.query_one(RunningCursor)
-        assert cursor.display and cursor.has_focus
+        await wait_until(lambda: cursor.display and cursor.has_focus)
         await wait_until(lambda: app.cursor_position == cursor.cursor_screen_offset)
         await wait_until(lambda: not cursor._draw_cursor)
         await wait_until(lambda: cursor._draw_cursor)
@@ -374,7 +374,7 @@ async def test_foreground_hides_prompt_until_completion_or_cancellation(
         await pilot.press("x", "enter")
         assert editor.value == ""
         release.set()
-        await wait_until(lambda: not shell._busy)
+        await wait_until(lambda: not shell._busy and line.display and editor.has_focus)
         assert line.display and editor.has_focus
         assert not cursor.display
         editor.value = "sleep 30"
@@ -382,12 +382,14 @@ async def test_foreground_hides_prompt_until_completion_or_cancellation(
         await wait_until(lambda: session.running)
         assert not line.display
         await pilot.press("ctrl+c")
-        await wait_until(lambda: not shell._busy)
+        await wait_until(lambda: not shell._busy and line.display and editor.has_focus)
         assert session.last_status == 130
         assert line.display and editor.has_focus
         editor.value = "sleep 30 &"
         await pilot.press("enter")
-        await wait_until(lambda: bool(session.jobs) and not shell._busy)
+        await wait_until(
+            lambda: bool(session.jobs) and not shell._busy and editor.has_focus
+        )
         assert session.jobs[1].result is None
         assert line.display and editor.has_focus
 

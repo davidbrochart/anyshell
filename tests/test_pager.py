@@ -365,3 +365,26 @@ async def test_pager_preflight_closes_files_without_showing_ui(
     assert any(event.kind == "error" for event in events)
     assert not any(event.kind == "page" for event in events)
     assert set(closed) == {"/good", "/bad"}
+
+
+async def test_pager_is_not_ready_until_log_has_visible_layout():
+    from anyshell import PageRequest
+
+    async def lines():
+        yield "ready after layout"
+
+    app = ShellApp()
+    async with app.run_test() as pilot:
+        pager = Pager(PageRequest("delayed layout", lines()))
+        await app.mount(pager)
+        log = pager.query_one(PagerLog)
+        log.styles.height = 0
+        await pilot.pause()
+        assert log.scrollable_content_region.height == 0
+        await pager.load()
+        await pilot.pause()
+        assert not pager.loaded
+        log.styles.height = "1fr"
+        await wait_until(lambda: pager.loaded)
+        assert log.scrollable_content_region.height > 0
+        assert log.lines[0].text == "ready after layout"

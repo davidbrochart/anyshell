@@ -24,6 +24,10 @@ class PagerLog(SelectableLog, can_focus=False):
 
     search_pattern: re.Pattern[str] | None = None
 
+    def on_resize(self, event) -> None:
+        super().on_resize(event)
+        self.call_after_refresh(self.query_ancestor(Pager)._mark_loaded)
+
     def _render_line(self, y: int, scroll_x: int, width: int) -> Strip:
         line = super()._render_line(y, scroll_x, width)
         if self.search_pattern is None or y >= len(self.lines):
@@ -105,6 +109,7 @@ class Pager(Vertical, can_focus=True):
         self.request = request
         self.closed = anyio.Event()
         self.loaded = False
+        self._eof = False
         self.error: Exception | None = None
         self._pattern: re.Pattern[str] | None = None
         self._direction = 1
@@ -129,13 +134,16 @@ class Pager(Vertical, can_focus=True):
             self.error = error
             self.closed.set()
         else:
+            self._eof = True
             # EOF can arrive before RichLog has its first layout. Only advertise
             # readiness after the frame that lays out and renders the content.
             self.call_after_refresh(self._mark_loaded)
 
     def _mark_loaded(self) -> None:
-        if self.is_mounted:
-            self.loaded = True
+        if self.is_mounted and self._eof:
+            region = self.query_one(PagerLog).scrollable_content_region
+            if region.width > 0 and region.height > 0:
+                self.loaded = True
 
     def action_next_page(self) -> None:
         self._match_line = None

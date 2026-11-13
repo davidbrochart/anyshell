@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Synchronize prompt cursor positioning and pager readiness with rendered layout,
+  and wait for focus restoration in foreground-command tests.
+
 - Open and check all pager files before showing `more` or `less`, reporting
   missing or unreadable files directly without flashing the pager.
 
