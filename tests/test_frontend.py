@@ -559,3 +559,35 @@ async def test_terminal_clicks_keep_active_cursor_focus(prompt_position):
         await pilot.press("ctrl+c")
         await wait_until(lambda: not shell._busy)
         assert editor.has_focus
+
+
+async def test_manual_scrollback_cancels_pending_prompt_scroll():
+    from anyshell.frontend import ShellScroll, Transcript
+
+    app = ShellApp(
+        Session(
+            MemoryFileSystem({"many.txt": "\n".join(f"line {i}" for i in range(80))})
+        )
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        viewport = shell.query_one(ShellScroll)
+        editor.value = "cat many.txt"
+        await pilot.press("enter")
+        await wait_until(lambda: not shell._busy and viewport.is_vertical_scroll_end)
+        await pilot.pause()
+        # A command's final scroll request may still be queued when the user scrolls up.
+        shell._request_prompt_scroll()
+        viewport.scroll_home(animate=False, immediate=True)
+        await pilot.pause()
+        assert viewport.scroll_y == 0
+        # Late layout and output updates must respect the user's chosen position.
+        viewport.on_resize()
+        shell.query_one(Transcript).write("later output")
+        await pilot.pause()
+        assert viewport.scroll_y == 0
+        assert editor.region.y > viewport.content_region.bottom
+        await pilot.press("x")
+        await wait_until(lambda: viewport.is_vertical_scroll_end)
+        assert editor.value == "x"

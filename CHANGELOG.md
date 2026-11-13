@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Cancel pending prompt auto-scroll when scrolling up, and preserve manual
+  scrollback during later layout or output updates.
+
 - Acquire pager keyboard focus synchronously before reporting readiness, so its
   first navigation key is not lost during the view transition.
 

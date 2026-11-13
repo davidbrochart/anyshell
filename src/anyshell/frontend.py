@@ -204,14 +204,20 @@ class RunningCursor(TextArea):
 class ShellScroll(VerticalScroll, can_focus=False):
     """One scrollback area containing both the transcript and the active prompt."""
 
+    _follow_prompt = True
+
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
         if self.is_mounted:
-            self.call_after_refresh(self.query_ancestor(Shell)._position_prompt_cursor)
+            shell = self.query_ancestor(Shell)
+            if new_value < old_value:
+                self._follow_prompt = False
+                shell._cancel_prompt_scroll()
+            self.call_after_refresh(shell._position_prompt_cursor)
 
     def on_resize(self) -> None:
         shell = self.query_ancestor(Shell)
-        if not shell._busy:
+        if self._follow_prompt and not shell._busy:
             shell._request_prompt_scroll()
 
 
@@ -326,6 +332,7 @@ class Shell(Vertical, can_focus=True):
         self.set_class(prompt_position == "inline", "inline-prompt")
         self.set_class(prompt_position == "bottom", "bottom-prompt")
         self._prompt_scroll_pending = False
+        self._prompt_scroll_generation = 0
         self.session = session if session is not None else Session()
         self._history_index = len(self.session.history)
         self._draft = ""
@@ -366,12 +373,20 @@ class Shell(Vertical, can_focus=True):
                 yield from self._compose_terminal()
             yield CompletionPopup()
 
+    def _cancel_prompt_scroll(self) -> None:
+        self._prompt_scroll_generation += 1
+        self._prompt_scroll_pending = False
+
     def _request_prompt_scroll(self) -> None:
+        if self.prompt_position == "inline":
+            self.query_one(ShellScroll)._follow_prompt = True
         if not self._prompt_scroll_pending:
             self._prompt_scroll_pending = True
-            self.call_after_refresh(self._show_prompt)
+            self.call_after_refresh(self._show_prompt, self._prompt_scroll_generation)
 
-    def _show_prompt(self) -> None:
+    def _show_prompt(self, generation: int) -> None:
+        if generation != self._prompt_scroll_generation:
+            return
         self._prompt_scroll_pending = False
         if self.is_mounted:
             if self._busy:
@@ -390,6 +405,7 @@ class Shell(Vertical, can_focus=True):
                     viewport.scroll_end(
                         animate=False,
                         force=True,
+                        immediate=True,
                         on_complete=self._position_prompt_cursor,
                     )
                 else:
@@ -425,7 +441,7 @@ class Shell(Vertical, can_focus=True):
     def on_mount(self) -> None:
         self._jobs_ready = anyio.Event()
         self.run_worker(self._background_jobs(), name="shell-jobs")
-        self.query_one(CommandInput).focus()
+        self.query_one(CommandInput).focus(scroll_visible=False)
         self._request_prompt_scroll()
 
     async def _background_jobs(self) -> None:
@@ -454,7 +470,7 @@ class Shell(Vertical, can_focus=True):
         self.query_one("#command-line").display = False
         cursor = self.query_one(RunningCursor)
         cursor.display = True
-        cursor.focus()
+        cursor.focus(scroll_visible=False)
         source = event.value
         event.input.value = ""
         self.query_one(RichLog).write(
@@ -476,7 +492,7 @@ class Shell(Vertical, can_focus=True):
             self.query_one("#prompt", Static).update(f"{self.session.cwd} ❯")
             self.query_one(RunningCursor).display = False
             self.query_one("#command-line").display = True
-            self.query_one(CommandInput).focus()
+            self.query_one(CommandInput).focus(scroll_visible=False)
             self._request_prompt_scroll()
 
     def _flush_file_rows(self) -> None:
@@ -539,7 +555,7 @@ class Shell(Vertical, can_focus=True):
                     await view.remove()
                 terminal.disabled = False
                 terminal.display = True
-                self.query_one(CommandInput).focus()
+                self.query_one(CommandInput).focus(scroll_visible=False)
                 self._request_prompt_scroll()
         elif event.kind == "clear":
             self._file_rows.clear()
@@ -666,7 +682,7 @@ class Shell(Vertical, can_focus=True):
         if isinstance(event.option_list, CompletionMenu):
             event.stop()
             self.accept_completion()
-            self.query_one(CommandInput).focus()
+            self.query_one(CommandInput).focus(scroll_visible=False)
 
 
 class ShellApp(App, inherit_bindings=False):

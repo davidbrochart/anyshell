@@ -267,6 +267,11 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
       "session.history[-1] == 'ls -l cursor-check' and not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').has_focus and browser_app.cursor_position == browser_app.query_one('CommandInput').cursor_screen_offset and browser_app.query_one('Shell').content_region.contains_region(browser_app.query_one('CommandInput').region) and (browser_app.query_one('Shell').prompt_position != 'inline' or browser_app.query_one('#shell-scroll').is_vertical_scroll_end)"));
 
+    if (promptPosition === 'inline') {
+      await python("browser_app.query_one('Shell')._request_prompt_scroll(); browser_app.query_one('#shell-scroll').scroll_home(animate=False, immediate=True)");
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await python("browser_app.query_one('#shell-scroll').scroll_y == 0"), true);
+    }
     await python("session.filesystem.write_text('/long-' + 'x' * 180 + '-first.txt', ''); session.filesystem.write_text('/long-' + 'x' * 180 + '-second.txt', '')");
     await page.keyboard.type('cat long-');
     await page.keyboard.press('Tab');
