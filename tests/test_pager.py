@@ -29,7 +29,9 @@ async def open_pager(app, pilot, source):
     await wait_until(lambda: bool(app.query(Pager)))
     pager = app.query_one(Pager)
     await wait_until(lambda: pager.loaded or pager.error is not None)
-    await wait_until(lambda: pager.has_focus)
+    await wait_until(lambda: app.focused is pager and pager.has_focus)
+    await pilot.pause()
+    assert app.focused is pager
     assert pager.query_one(PagerLog).scrollable_content_region.height > 0
     return pager
 
@@ -388,3 +390,25 @@ async def test_pager_is_not_ready_until_log_has_visible_layout():
         await wait_until(lambda: pager.loaded)
         assert log.scrollable_content_region.height > 0
         assert log.lines[0].text == "ready after layout"
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_pager_restores_keyboard_focus_before_reporting_ready(prompt_position):
+    from anyshell import PageRequest
+
+    async def lines():
+        for index in range(100):
+            yield f"line {index}"
+
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        pager = Pager(PageRequest("focus handoff", lines()))
+        await app.mount(pager)
+        await pilot.pause()
+        # Simulate a queued focus update from the previous shell view.
+        app.screen.set_focus(app.query_one(Shell), scroll_visible=False)
+        await pager.load()
+        await wait_until(lambda: pager.loaded)
+        assert app.focused is pager
+        await pilot.press("space")
+        assert pager.query_one(PagerLog).scroll_y > 0

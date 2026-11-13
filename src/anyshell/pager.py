@@ -122,7 +122,8 @@ class Pager(Vertical, can_focus=True):
             yield PagerSearchInput()
 
     def on_mount(self) -> None:
-        self.focus()
+        # Do not queue focus behind the first navigation key.
+        self.screen.set_focus(self, scroll_visible=False)
 
     async def load(self) -> None:
         log = self.query_one(PagerLog)
@@ -143,6 +144,9 @@ class Pager(Vertical, can_focus=True):
         if self.is_mounted and self._eof:
             region = self.query_one(PagerLog).scrollable_content_region
             if region.width > 0 and region.height > 0:
+                if not self.loaded and not self._searching:
+                    # Finish the keyboard handoff before advertising readiness.
+                    self.screen.set_focus(self, scroll_visible=False)
                 self.loaded = True
 
     def action_next_page(self) -> None:

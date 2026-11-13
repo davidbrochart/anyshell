@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Acquire pager keyboard focus synchronously before reporting readiness, so its
+  first navigation key is not lost during the view transition.
+
 - Synchronize prompt cursor positioning and pager readiness with rendered layout,
   and wait for focus restoration in foreground-command tests.
 
