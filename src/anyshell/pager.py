@@ -9,16 +9,17 @@ from anytext.binding import Binding
 from anytext.containers import Horizontal, Vertical
 from anytext.reactive import var
 from anytext.strip import Strip
-from anytext.widgets import Input, RichLog, Static
+from anytext.widgets import Input, Static
 from rich.cells import cell_len
 from rich.measure import Measurement
 from rich.style import Style
 from rich.text import Text
 
 from .engine import PageRequest
+from .log import SelectableLog
 
 
-class PagerLog(RichLog, can_focus=False):
+class PagerLog(SelectableLog, can_focus=False):
     """Keep keyboard focus on the pager and expose mouse scrolling."""
 
     search_pattern: re.Pattern[str] | None = None

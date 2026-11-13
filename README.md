@@ -27,6 +27,14 @@ editor, run `uv run --extra anytext anyshell --prompt-position bottom` or constr
 
 The widget provides a scrollable transcript, Up/Down history, Tab completion for
 command names, options, and unquoted paths, Ctrl+C cancellation, and Ctrl+Q to quit the demo.
+Drag across command output to select text. Ctrl+C copies selected output when no
+foreground command is running; Ctrl+Shift+C copies it while a command is running.
+Mouse selection and copying also work in the pager. Browser copying uses the
+browser clipboard when permission is available.
+
+The prompt is replaced by a blank cursor line while a foreground command runs
+and returns when it finishes
+or is cancelled with Ctrl+C. Background commands return the prompt immediately.
 Tab first extends the shared prefix when several completions match. If no more
 characters can be filled in, Tab opens a menu beside the cursor. Use Up/Down or
 Tab to select, Enter to insert, and Escape to dismiss; typing also dismisses it.
@@ -48,7 +56,8 @@ cat notes.txt |
     count
 ```
 
-Unquoted newlines separate commands, which execute in order. A backslash followed
+Unquoted newlines and semicolons separate commands, which execute in order.
+For example, `sleep 1; sleep 1` waits twice in sequence. A backslash followed
 by a newline joins lines without inserting a character. Newlines inside quotes
 remain part of the argument. All commands are parsed and validated before any
 runs; a runtime failure does not prevent later commands from running, and the
@@ -97,13 +106,57 @@ is `None`. `ls -a` (`--all`) includes hidden entries, and flags combine as `-la`
 `touch PATH...` creates missing files or updates modification times without
 changing existing contents. Existing directories can also be touched.
 `rm PATH...` removes files, continuing with remaining paths if one fails.
+`rm -r DIRECTORY...` removes directory trees, including hidden entries.
+`rm -f` ignores missing paths and accepts no operands; combine the flags as
+`rm -rf DIRECTORY...`. Force does not suppress other errors. Recursive removal
+does not follow symbolic links and cannot remove the workspace root.
 `rmdir DIRECTORY...` removes empty directories and rejects files and nonempty
 directories; its completion suggests only directories.
 
 This is an initial shell language: quoting, multiline commands, and pipes are supported. Bash scripts,
-redirection, environment expansion, glob expansion, process execution, job
-control, and persistent history are not implemented. Commands are trusted Python
+redirection, environment expansion, glob expansion, process execution, foregrounding or suspending jobs, and persistent history
+are not implemented. Commands are trusted Python
 code, not a sandbox. Browser filesystem changes are in-memory and reset on reload.
+
+## Background commands
+
+Append `&` to run a command or pipeline in the background and return to the prompt:
+
+```sh
+sleep 30 &
+cat notes.txt | grep Python &
+jobs
+wait 1
+kill 1
+```
+
+`jobs` lists job IDs and states. `wait ID` waits for a job; `wait` waits for all
+jobs still in the job list. `kill ID` cancels a job cooperatively. Ctrl+C cancels the
+foreground command (including `wait`), leaving background jobs running. Job
+output appears in the transcript, with launch and completion notifications.
+Completed jobs are shown once by `jobs`, then removed from the job list.
+Job IDs are not reused during the session.
+
+An unquoted `&` also separates commands: `sleep 30 & echo ready`. Quote or escape
+it to pass a literal ampersand. `&&` is not supported. Each job inherits the
+working directory and command registry at launch and shares the filesystem;
+changing directory in one job does not affect the prompt or other jobs.
+Interactive commands such as `edit`, `more`, and `less` cannot run in the
+background. Closing the shell cancels unfinished jobs. Headless `-c` execution
+waits for background jobs before exiting; its exit status is the last submitted
+foreground command's status (or zero for a background launch).
+
+Engine callers provide a lifetime for background tasks explicitly:
+
+```python
+async with session.background():
+    await session.execute("sleep 1 &", receive)
+    await session.wait_jobs()
+```
+
+Leaving this context cancels unfinished jobs. `Session.jobs` maps IDs to `Job`
+objects with `source`, `result`, and `done`; launch and completion events have
+kind `job`. Background completion does not change `Session.last_status`.
 
 ## Find files
 
@@ -130,7 +183,8 @@ directory, or absolute when the starting path is absolute), and `type` (`file`,
 are listed without following them. Errors are reported while traversal continues
 with other entries and starting paths; any error makes the command fail.
 Custom filesystem implementations provide `entry_type()` without following the
-final symbolic link, alongside the existing directory-listing methods.
+final symbolic link, alongside the existing directory-listing methods. Filesystems supporting recursive
+removal also accept `remove(path, recursive=True)`.
 
 ## Move and copy files
 
@@ -167,6 +221,8 @@ and Home/End jumps to the beginning/end. `q`, Ctrl+Q, or Escape closes the pager
 Mouse scrolling also works. Shortcuts appear in the footer.
 
 The pager accepts files or pipeline input, formatting Python values for display.
+File arguments are opened and checked before the pager appears; missing or
+unreadable files report an error directly in the shell.
 It streams input into scrollback; closing it stops consuming the pipeline.
 Headless execution reports that an interactive frontend is required. Other
 frontends can handle the `page` event's `PageRequest`, consume its `lines`, mark

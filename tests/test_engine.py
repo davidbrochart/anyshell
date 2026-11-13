@@ -378,3 +378,53 @@ async def test_rm_multiple_paths_and_continues_after_errors(filesystem):
     with pytest.raises(FileNotFoundError):
         filesystem.stat("/notes.txt")
     assert (await execute(session, "rm"))[0].status == 1
+
+
+@pytest.mark.parametrize("flags", ["-r", "-R", "--recursive", "-rf", "-fr", "-r -f"])
+async def test_rm_recursive(filesystem, flags):
+    filesystem.mkdir("/docs/nested")
+    filesystem.write_text("/docs/nested/.hidden", "keep no files")
+    filesystem.mkdir("/docs-other")
+    session = Session(filesystem)
+    assert (await execute(session, f"rm {flags} docs"))[0].status == 0
+    assert not filesystem.is_dir("/docs")
+    assert filesystem.is_dir("/docs-other")
+    assert filesystem.read_text("/notes.txt").startswith("zebra")
+
+
+async def test_rm_force_only_ignores_missing_paths(filesystem):
+    session = Session(filesystem)
+    assert (await execute(session, "rm -f"))[0].status == 0
+    assert (await execute(session, "rm -rf missing"))[0].status == 0
+    assert (await execute(session, "rm -f missing notes.txt"))[0].status == 0
+    assert (await execute(session, "rm -f docs"))[0].status == 1
+    assert (await execute(session, "rm -rf /"))[0].status == 1
+    assert filesystem.is_dir("/docs")
+    assert filesystem.is_dir("/")
+
+
+def test_recursive_remove_does_not_follow_symlinks(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "keep.txt").write_text("keep")
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    try:
+        (tree / "link").symlink_to(target, target_is_directory=True)
+        (tmp_path / "link").symlink_to(target, target_is_directory=True)
+        (tmp_path / "broken").symlink_to(tmp_path / "missing")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    fs = LocalFileSystem(tmp_path)
+    for path in ("/tree", "/link", "/broken"):
+        fs.remove(path, recursive=True)
+    assert (target / "keep.txt").read_text() == "keep"
+    assert not tree.exists()
+    assert not (tmp_path / "link").is_symlink()
+    assert not (tmp_path / "broken").is_symlink()
+
+
+async def test_sleep_is_silent():
+    result, values, _ = await execute(Session(), "sleep 0.01")
+    assert result.status == 0
+    assert values == []

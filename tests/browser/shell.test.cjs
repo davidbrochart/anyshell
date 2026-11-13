@@ -63,8 +63,66 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value == 'sleep 30'"));
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython('session.running'));
+    assert.equal(await python("browser_app.query_one('#command-line').display"), false);
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "browser_app.query_one('RunningCursor').has_focus and browser_app.cursor_position == browser_app.query_one('RunningCursor').cursor_screen_offset"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "not browser_app.query_one('RunningCursor')._draw_cursor"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "browser_app.query_one('RunningCursor')._draw_cursor"));
+
     await page.keyboard.press('Control+c');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython('not session.running and session.last_status == 130'));
+    await page.keyboard.type('sleep 30 &');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "len(session.jobs) == 1 and not session.running and not browser_app.query_one('Shell')._busy"));
+    assert.equal(await python("session.jobs[1].result is None"), true);
+    assert.equal(await python("browser_app.query_one('#command-line').display and browser_app.query_one('CommandInput').has_focus"), true);
+    await page.keyboard.type('kill 1');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "session.jobs[1].done.is_set() and not browser_app.query_one('Shell')._busy"));
+    assert.equal(await python("session.jobs[1].result.cancelled"), true);
+
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.keyboard.type('echo select me');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "not browser_app.query_one('Shell')._busy and session.history[-1] == 'echo select me'"));
+    const selectionCell = JSON.parse(await python("__import__('json').dumps((browser_app.query_one('Transcript').content_region.x, browser_app.query_one('Transcript').content_region.y + len(browser_app.query_one('Transcript').lines) - 1 - browser_app.query_one('Transcript').scroll_offset.y))"));
+    const selectionScreen = await page.locator('.xterm-screen').boundingBox();
+    const columns = await page.evaluate(() => window.anyshellDemo.terminal.cols);
+    const rows = await page.evaluate(() => window.anyshellDemo.terminal.rows);
+    const cellWidth = selectionScreen.width / columns;
+    const cellHeight = selectionScreen.height / rows;
+    await page.mouse.click(selectionScreen.x + (columns - 4) * cellWidth,
+      selectionScreen.y + 5.5 * cellHeight);
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "browser_app.query_one('CommandInput').has_focus"));
+    const originalSelectionColors = await page.evaluate(({x, y}) => {
+      const buffer = window.anyshellDemo.terminal.buffer.active;
+      const cell = buffer.getLine(buffer.baseY + y).getCell(x);
+      return {foreground: cell.getFgColor(), background: cell.getBgColor()};
+    }, {x: selectionCell[0], y: selectionCell[1]});
+    await page.mouse.move(selectionScreen.x + (selectionCell[0] + 0.2) * cellWidth,
+      selectionScreen.y + (selectionCell[1] + 0.5) * cellHeight);
+    await page.mouse.down();
+    await page.mouse.move(selectionScreen.x + (selectionCell[0] + 8.2) * cellWidth,
+      selectionScreen.y + (selectionCell[1] + 0.5) * cellHeight, {steps: 8});
+    await page.mouse.up();
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "browser_app.screen.get_selected_text() == 'select me'"));
+    await page.waitForFunction(({x, y, original}) => {
+      const buffer = window.anyshellDemo.terminal.buffer.active;
+      const cell = buffer.getLine(buffer.baseY + y)?.getCell(x);
+      return cell?.getChars() === 's' && cell.getFgColor() === original.foreground &&
+        cell.getBgColor() !== original.background;
+    }, {x: selectionCell[0], y: selectionCell[1], original: originalSelectionColors});
+    await page.keyboard.press('Control+c');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.clipboard == 'select me'"));
+    await page.waitForFunction(async () => (await navigator.clipboard.readText()) === 'select me');
+    await python("browser_app.screen.clear_selection()");
     await page.keyboard.type('write browser.txt "hello browser"');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("'browser.txt' in [r['name'] for r in session.filesystem.listdir('/')]"));
@@ -118,7 +176,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     assert.equal(await python("session.filesystem.stat('/created.txt')['size']"), 0);
     await page.keyboard.type('edit created.txt');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('FileEditor')) and browser_app.query_one('FileEditor').query_one('TextArea').has_focus"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("any(area.has_focus for editor in browser_app.query('FileEditor') for area in editor.query('TextArea'))"));
     await page.keyboard.type('edited in the browser');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('FileEditor').query_one('TextArea').text == 'edited in the browser'"));
     await page.keyboard.press('Control+s');
@@ -129,7 +187,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query('FileEditor') and not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').has_focus"));
     await page.keyboard.type('edit created.txt');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("bool(browser_app.query('FileEditor')) and browser_app.query_one('FileEditor').query_one('TextArea').has_focus"));
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("any(area.has_focus for editor in browser_app.query('FileEditor') for area in editor.query('TextArea'))"));
     await page.keyboard.type(' unsaved');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("' unsaved' in browser_app.query_one('FileEditor').query_one('TextArea').text"));
     await page.keyboard.press('Control+q');
@@ -146,6 +204,12 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await command('cp -r notes notes-copy');
     await command('mv notes-copy moved-notes');
     assert.equal(await python("session.last_status == 0 and not session.filesystem.is_dir('/notes-copy') and session.filesystem.read_text('/moved-notes/fruits.txt') == session.filesystem.read_text('/notes/fruits.txt')"), true);
+    const pageEventsBeforeFailure = await python("sum(event.kind == 'page' for event in browser_app.query_one('Shell').output)");
+    for (const pagerCommand of ['more', 'less']) {
+      await command(`${pagerCommand} missing-pager.txt`);
+      assert.equal(await python(`session.last_status == 1 and '${pagerCommand}: /missing-pager.txt' in [line.text.rstrip() for line in browser_app.query_one('Transcript').lines]`), true);
+      assert.equal(await python("sum(event.kind == 'page' for event in browser_app.query_one('Shell').output)"), pageEventsBeforeFailure);
+    }
     await page.keyboard.type('cat notes/fruits.txt | more');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
@@ -197,6 +261,12 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     });
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.screenshot({path: path.join(root, `.cache/browser-long-${promptPosition}.png`)});
+    await python("session.filesystem.mkdir('/cursor-check'); [session.filesystem.write_text(f'/cursor-check/file-{i:03}.txt', '') for i in range(400)]");
+    await page.keyboard.type('ls -l cursor-check');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "session.history[-1] == 'ls -l cursor-check' and not browser_app.query_one('Shell')._busy and browser_app.query_one('CommandInput').has_focus and browser_app.cursor_position == browser_app.query_one('CommandInput').cursor_screen_offset and browser_app.query_one('Shell').content_region.contains_region(browser_app.query_one('CommandInput').region) and (browser_app.query_one('Shell').prompt_position != 'inline' or browser_app.query_one('#shell-scroll').is_vertical_scroll_end)"));
+
     await python("session.filesystem.write_text('/long-' + 'x' * 180 + '-first.txt', ''); session.filesystem.write_text('/long-' + 'x' * 180 + '-second.txt', '')");
     await page.keyboard.type('cat long-');
     await page.keyboard.press('Tab');

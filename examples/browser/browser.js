@@ -26,6 +26,16 @@ try {
   terminal.open(terminalScreen);
   // Draw block and box glyphs as shapes so font metrics cannot leave row seams.
   terminal.loadAddon(new CanvasAddon.CanvasAddon());
+  // Forward the shell's terminal clipboard writes to the browser clipboard.
+  disposables.push(terminal.parser.registerOscHandler(52, (data) => {
+    const encoded = data.slice(data.indexOf(";") + 1);
+    if (encoded === "?" || !navigator.clipboard?.writeText) return false;
+    try {
+      const text = new TextDecoder().decode(Uint8Array.from(atob(encoded), c => c.charCodeAt(0)));
+      navigator.clipboard.writeText(text).catch(() => {});
+      return true;
+    } catch { return false; }
+  }));
   fit.fit();
   observer = new ResizeObserver(() => fit.fit());
   observer.observe(terminalScreen);

@@ -131,3 +131,59 @@ async def test_shift_enter_sequences_cursor_navigation_and_cancel(prompt_positio
         editor.value = "echo 'unfinished"
         await pilot.press("enter", "ctrl+c")
         assert editor.value == ""
+
+
+def test_semicolon_parser_and_literals():
+    assert parse_commands("sleep 1; sleep 1;") == [[["sleep", "1"]], [["sleep", "1"]]]
+    assert is_complete("sleep 1;")
+    assert parse_commands("echo 'a;b'; echo \"c;d\"; echo e\\;f") == [
+        [["echo", "a;b"]],
+        [["echo", "c;d"]],
+        [["echo", "e;f"]],
+    ]
+    assert parse_commands("echo a | cat;\necho b & echo c") == [
+        [["echo", "a"], ["cat"]],
+        [["echo", "b"]],
+        [["echo", "c"]],
+    ]
+    for source in (
+        ";",
+        "; echo a",
+        "echo a;;echo b",
+        "echo a |; echo b",
+        "echo a &; echo b",
+    ):
+        with pytest.raises(ShellError):
+            parse_commands(source)
+
+
+async def test_semicolon_sequences_status_validation_and_completion():
+    session = Session()
+    result, output = await execute(session, "echo first; sleep 0.01; echo last;")
+    assert result.status == 0 and output == ["first", "last"]
+    assert session.history == ["echo first; sleep 0.01; echo last;"]
+    result, output = await execute(session, "cat missing; echo recovered")
+    assert result.status == 0 and output == ["recovered"]
+    result, output = await execute(session, "echo before; sleep invalid")
+    assert result.status == 1 and output == []
+    assert await session.complete("sleep 1; ec") == ["sleep 1; echo"]
+    assert await session.complete("echo first;") == [
+        "echo first;" + name for name in sorted(session.commands)
+    ]
+
+
+async def test_semicolon_cancellation_stops_remaining_commands():
+    session = Session()
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(session.execute, "sleep 30; echo should-not-run", emit)
+        with anyio.fail_after(3):
+            while not session.running:
+                await anyio.lowlevel.checkpoint()
+            session.cancel()
+    assert session.last_status == 130
+    assert not [event for event in events if event.kind == "output"]
