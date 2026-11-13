@@ -5,6 +5,7 @@ from __future__ import annotations
 import posixpath
 import shlex
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from inspect import BoundArguments, isawaitable
 from io import StringIO
@@ -24,7 +25,7 @@ class ShellError(Exception):
 
 @dataclass(frozen=True)
 class Event:
-    kind: Literal["output", "error", "clear", "cwd", "status", "edit", "page"]
+    kind: Literal["output", "error", "clear", "cwd", "status", "edit", "page", "job"]
     value: Any = None
 
 
@@ -163,6 +164,15 @@ class Result:
     cancelled: bool = False
 
 
+@dataclass
+class Job:
+    id: int
+    source: str
+    result: Result | None = None
+    scope: anyio.CancelScope | None = field(default=None, repr=False)
+    done: anyio.Event = field(default_factory=anyio.Event, repr=False)
+
+
 def parse_pipeline(source: str) -> list[list[str]]:
     """Split unquoted pipes, then parse each stage with shell-style quoting."""
     parts: list[str] = []
@@ -194,10 +204,10 @@ def parse_pipeline(source: str) -> list[list[str]]:
     return stages
 
 
-def _scan_commands(
+def _scan_jobs(
     source: str, *, keep_empty_last: bool = False
-) -> tuple[list[str], bool]:
-    commands: list[str] = []
+) -> tuple[list[tuple[str, bool]], bool]:
+    commands: list[tuple[str, bool]] = []
     buffer: list[str] = []
     quote = ""
     pipe = False
@@ -225,9 +235,17 @@ def _scan_commands(
             quote = char
             pipe = False
             buffer.append(char)
+        elif char == "&":
+            commands.append(("".join(buffer), True))
+            buffer.clear()
+            pipe = False
+        elif char == ";":
+            commands.append(("".join(buffer), False))
+            buffer.clear()
+            pipe = False
         elif char == "\n" and not pipe:
             if "".join(buffer).strip():
-                commands.append("".join(buffer))
+                commands.append(("".join(buffer), False))
             buffer.clear()
         else:
             buffer.append(char)
@@ -235,8 +253,13 @@ def _scan_commands(
                 pipe = char == "|"
         index += 1
     if "".join(buffer).strip() or keep_empty_last:
-        commands.append("".join(buffer))
+        commands.append(("".join(buffer), False))
     return commands, bool(quote or pipe or incomplete)
+
+
+def _scan_commands(source: str, *, keep_empty_last: bool = False):
+    commands, incomplete = _scan_jobs(source, keep_empty_last=keep_empty_last)
+    return [text for text, _ in commands], incomplete
 
 
 def is_complete(source: str) -> bool:
@@ -245,20 +268,24 @@ def is_complete(source: str) -> bool:
 
 
 def parse_commands(source: str) -> list[list[list[str]]]:
-    """Parse newline-separated pipelines, preserving quoted newlines."""
-    commands, incomplete = _scan_commands(source)
+    """Parse pipelines separated by newlines, ; or &, preserving quoted text."""
+    commands, incomplete = _scan_jobs(source)
     if incomplete:
         raise ShellError(
             "unfinished command: close quotes or complete the continuation"
         )
-    return [parse_pipeline(command) for command in commands]
+    if any(background and not command.strip() for command, background in commands):
+        raise ShellError("empty background command; && is not supported")
+    if any(not command.strip() for command, _ in commands):
+        raise ShellError("empty command")
+    return [parse_pipeline(command) for command, _ in commands]
 
 
 class Session:
     """A shell session owns commands, history, working directory and cancellation.
 
-    Commands exchange Python values through bounded AnyIO streams. One command
-    line may run per session. Distinct sessions can run concurrently.
+    Commands exchange Python values through bounded AnyIO streams. One foreground
+    command line may run alongside background jobs owned by background().
     """
 
     def __init__(self, filesystem: FileSystem | None = None) -> None:
@@ -269,10 +296,75 @@ class Session:
         self._scope: anyio.CancelScope | None = None
         self.last_status = 0
         self._executing = False
+        self.jobs: dict[int, Job] = {}
+        self._next_job_id = 1
+        self._job_group = None
         from .commands import BUILTINS
 
         for command in BUILTINS:
             self.register(command)
+
+    @asynccontextmanager
+    async def background(self):
+        """Own background tasks; leaving this context cancels unfinished jobs."""
+        if self._job_group is not None:
+            raise ShellError("background task context is already open")
+        async with anyio.create_task_group() as group:
+            self._job_group = group
+            try:
+                yield self
+            finally:
+                self._job_group = None
+                group.cancel_scope.cancel()
+
+    async def wait_jobs(self, job_id: int | None = None) -> int:
+        jobs = list(self.jobs.values()) if job_id is None else [self.get_job(job_id)]
+        status = 0
+        for job in jobs:
+            await job.done.wait()
+            status = job.result.status
+        return status
+
+    def get_job(self, job_id: int) -> Job:
+        try:
+            return self.jobs[job_id]
+        except KeyError:
+            raise ShellError(f"no such job: {job_id}") from None
+
+    async def _start_job(self, source, commands, emit, output_width):
+        job = Job(self._next_job_id, source)
+        self._next_job_id += 1
+        child = Session(self.filesystem)
+        child.cwd = self.cwd
+        child.commands = self.commands.copy()
+
+        async def output(event):
+            if event.kind in {"edit", "page", "clear"}:
+                raise ShellError("interactive commands cannot run in the background")
+            await emit(event)
+
+        async def run(*, task_status=anyio.TASK_STATUS_IGNORED):
+            status = 1
+            cancelled = False
+            with anyio.CancelScope() as scope:
+                job.scope = scope
+                task_status.started()
+                try:
+                    status = await child._pipeline(
+                        commands, output, output_width=output_width
+                    )
+                except anyio.get_cancelled_exc_class():
+                    cancelled = True
+                    raise
+                finally:
+                    job.result = Result(130 if cancelled else status, cancelled)
+                    job.scope = None
+                    job.done.set()
+            await emit(Event("job", job))
+
+        self.jobs[job.id] = job
+        await emit(Event("job", job))
+        await self._job_group.start(run)
 
     @property
     def running(self) -> bool:
@@ -280,7 +372,7 @@ class Session:
 
     def register(self, command: Command) -> None:
         if not command.name or any(
-            char.isspace() or char == "|" for char in command.name
+            char.isspace() or char in "|&;" for char in command.name
         ):
             raise ValueError("command names must be nonempty words")
         self.commands[command.name] = command
@@ -319,7 +411,13 @@ class Session:
             self._scope = scope
             try:
                 pipelines = []
-                for stages in parse_commands(source):
+                parsed = parse_commands(source)
+                plans, _ = _scan_jobs(source)
+                for stages, (text, background) in zip(parsed, plans):
+                    if background and self._job_group is None:
+                        raise ShellError(
+                            "background commands require a Session.background() context"
+                        )
                     commands = []
                     for stage in stages:
                         if stage[0] not in self.commands:
@@ -335,11 +433,17 @@ class Session:
                                 f"{command.name} must run outside a pipeline"
                             )
                         commands.append(invocation)
-                    pipelines.append(commands)
-                for commands in pipelines:
-                    status = await self._pipeline(
-                        commands, emit, output_width=output_width
-                    )
+                    pipelines.append((commands, text, background))
+                for commands, text, background in pipelines:
+                    if background:
+                        await self._start_job(
+                            text.strip(), commands, emit, output_width
+                        )
+                        status = 0
+                    else:
+                        status = await self._pipeline(
+                            commands, emit, output_width=output_width
+                        )
             except (ShellError, OSError, ValueError) as error:
                 status = 1
                 await emit(Event("error", str(error)))

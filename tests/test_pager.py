@@ -29,7 +29,9 @@ async def open_pager(app, pilot, source):
     await wait_until(lambda: bool(app.query(Pager)))
     pager = app.query_one(Pager)
     await wait_until(lambda: pager.loaded or pager.error is not None)
-    await wait_until(lambda: pager.has_focus)
+    await wait_until(lambda: app.focused is pager and pager.has_focus)
+    await pilot.pause()
+    assert app.focused is pager
     assert pager.query_one(PagerLog).scrollable_content_region.height > 0
     return pager
 
@@ -115,16 +117,30 @@ async def test_pager_navigation_without_another_refresh(filesystem, prompt_posit
         await wait_until(lambda: not app.query_one(Shell)._busy)
 
 
-async def test_more_reports_read_errors(filesystem):
-    app = ShellApp(Session(filesystem))
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+@pytest.mark.parametrize("command", ["more", "less"])
+async def test_more_reports_read_errors(filesystem, prompt_position, command):
+    app = ShellApp(Session(filesystem), prompt_position=prompt_position)
     async with app.run_test() as pilot:
-        for path in ("missing", "/"):
-            app.query_one(CommandInput).value = f"more {path}"
+        for path in ("missing", "/", "long.txt missing"):
+            app.query_one(CommandInput).value = f"{command} {path}"
             await pilot.press("enter")
             await wait_until(lambda: not app.query_one(Shell)._busy)
             assert not app.query(Pager)
+            assert not any(
+                event.kind == "page" for event in app.query_one(Shell).output
+            )
             assert app.query_one(Shell).session.last_status == 1
             assert any(e.kind == "error" for e in app.query_one(Shell).output)
+            await pilot.pause()
+            error = [e.value for e in app.query_one(Shell).output if e.kind == "error"][
+                -1
+            ]
+            lines = [line.text.rstrip() for line in app.query_one(RichLog).lines]
+            assert any(line.startswith(f"{command}: ") for line in lines)
+            if len(error) <= app.query_one(RichLog).scrollable_content_region.width:
+                assert error in lines
+            assert app.query_one(CommandInput).has_focus
 
 
 @pytest.mark.parametrize("command", ["more", "less"])
@@ -154,13 +170,13 @@ async def test_more_quitting_stops_streaming_pipeline(command):
 
 @pytest.mark.parametrize("command", ["more", "less"])
 async def test_more_requires_interactive_frontend(command):
-    session = Session()
+    session = Session(MemoryFileSystem({"file.txt": "hello"}))
     events = []
 
     async def emit(event):
         events.append(event)
 
-    result = await session.execute(f"{command} missing.txt", emit)
+    result = await session.execute(f"{command} file.txt", emit)
     assert result.status == 1
     assert any(e.kind == "error" and "interactive frontend" in e.value for e in events)
 
@@ -298,3 +314,101 @@ async def test_less_highlights_all_matches_and_replaces_search():
         assert highlighted() == ""
         await pilot.press("q")
         await wait_until(lambda: not app.query_one(Shell)._busy)
+
+
+async def test_mouse_selection_in_scrolled_pager(filesystem):
+    app = ShellApp(Session(filesystem))
+    async with app.run_test(size=(70, 20)) as pilot:
+        pager = await open_pager(app, pilot, "more long.txt")
+        log = pager.query_one(PagerLog)
+        log.scroll_to(y=20, animate=False, immediate=True)
+        await pilot.pause()
+        await pilot.mouse_down(log, offset=(1, 0))
+        await pilot.hover(log, offset=(4, 0))
+        await pilot.mouse_up(log, offset=(4, 0))
+        await wait_until(lambda: app.screen.get_selected_text() == "line")
+        await pilot.press("ctrl+shift+c")
+        assert app.clipboard == "line"
+        await pilot.press("q")
+        await wait_until(lambda: not app.query_one(Shell)._busy)
+
+
+@pytest.mark.parametrize("command", ["more", "less"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        PermissionError("unreadable"),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid"),
+    ],
+)
+async def test_pager_preflight_closes_files_without_showing_ui(
+    command, failure, monkeypatch
+):
+    fs = MemoryFileSystem()
+    closed = []
+
+    def read_lines(path):
+        try:
+            if path == "/bad":
+                raise failure
+            yield "first line"
+            yield "second line"
+        finally:
+            closed.append(path)
+
+    monkeypatch.setattr(fs, "read_lines", read_lines)
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await Session(fs).execute(f"{command} good bad", emit)
+    assert result.status == 1
+    assert any(event.kind == "error" for event in events)
+    assert not any(event.kind == "page" for event in events)
+    assert set(closed) == {"/good", "/bad"}
+
+
+async def test_pager_is_not_ready_until_log_has_visible_layout():
+    from anyshell import PageRequest
+
+    async def lines():
+        yield "ready after layout"
+
+    app = ShellApp()
+    async with app.run_test() as pilot:
+        pager = Pager(PageRequest("delayed layout", lines()))
+        await app.mount(pager)
+        log = pager.query_one(PagerLog)
+        log.styles.height = 0
+        await pilot.pause()
+        assert log.scrollable_content_region.height == 0
+        await pager.load()
+        await pilot.pause()
+        assert not pager.loaded
+        log.styles.height = "1fr"
+        await wait_until(lambda: pager.loaded)
+        assert log.scrollable_content_region.height > 0
+        assert log.lines[0].text == "ready after layout"
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_pager_restores_keyboard_focus_before_reporting_ready(prompt_position):
+    from anyshell import PageRequest
+
+    async def lines():
+        for index in range(100):
+            yield f"line {index}"
+
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        pager = Pager(PageRequest("focus handoff", lines()))
+        await app.mount(pager)
+        await pilot.pause()
+        # Simulate a queued focus update from the previous shell view.
+        app.screen.set_focus(app.query_one(Shell), scroll_visible=False)
+        await pager.load()
+        await wait_until(lambda: pager.loaded)
+        assert app.focused is pager
+        await pilot.press("space")
+        assert pager.query_one(PagerLog).scroll_y > 0

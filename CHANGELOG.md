@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- Cancel pending prompt auto-scroll when scrolling up, and preserve manual
+  scrollback during later layout or output updates.
+
+- Acquire pager keyboard focus synchronously before reporting readiness, so its
+  first navigation key is not lost during the view transition.
+
+- Synchronize prompt cursor positioning and pager readiness with rendered layout,
+  and wait for focus restoration in foreground-command tests.
+
+- Open and check all pager files before showing `more` or `less`, reporting
+  missing or unreadable files directly without flashing the pager.
+
+- Keep the transcript width during pager teardown so missing-file errors do not
+  wrap one character per line.
+
+- Keep the active cursor focused when clicking terminal background, borders,
+  prompt labels, or output.
+
+- Highlight selection backgrounds while preserving original text colors and formatting.
+
+- Support mouse selection, highlighting, and copying in the transcript and pager,
+  including clipboard writes in the browser demo.
+
+- Remove completed jobs after `jobs` reports them, without reusing job IDs.
+
+- Anchor overflowing inline transcripts at the bottom when restoring the prompt,
+  including late layout updates after large listings.
+
+- Restore the terminal cursor to the prompt after long output scrolls the screen.
+
+- Advance to a fresh prompt line when Enter submits empty or whitespace-only input.
+
+- Support sequential commands separated by `;`, including trailing semicolons.
+
+- Keep the foreground waiting cursor blinking while input remains read-only.
+
+- Make `sleep` silent and show a blank cursor line while foreground commands run.
+
+- Hide the prompt during foreground commands and restore it on completion or
+  cancellation, keeping foreground and background execution visually distinct.
+
+- Run background commands and pipelines with `&`; track, await, and cancel them
+  with `jobs`, `wait`, and `kill` on desktop and in the browser.
+
+- Support `rm -r` directory trees and `rm -f` missing paths, including `rm -rf`.
+
 - Highlight regex search matches in `less`.
 
 - Remove the filename header from `more` and `less`.

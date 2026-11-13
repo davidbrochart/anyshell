@@ -9,19 +9,24 @@ from anytext.binding import Binding
 from anytext.containers import Horizontal, Vertical
 from anytext.reactive import var
 from anytext.strip import Strip
-from anytext.widgets import Input, RichLog, Static
+from anytext.widgets import Input, Static
 from rich.cells import cell_len
 from rich.measure import Measurement
 from rich.style import Style
 from rich.text import Text
 
 from .engine import PageRequest
+from .log import SelectableLog
 
 
-class PagerLog(RichLog, can_focus=False):
+class PagerLog(SelectableLog, can_focus=False):
     """Keep keyboard focus on the pager and expose mouse scrolling."""
 
     search_pattern: re.Pattern[str] | None = None
+
+    def on_resize(self, event) -> None:
+        super().on_resize(event)
+        self.call_after_refresh(self.query_ancestor(Pager)._mark_loaded)
 
     def _render_line(self, y: int, scroll_x: int, width: int) -> Strip:
         line = super()._render_line(y, scroll_x, width)
@@ -104,6 +109,7 @@ class Pager(Vertical, can_focus=True):
         self.request = request
         self.closed = anyio.Event()
         self.loaded = False
+        self._eof = False
         self.error: Exception | None = None
         self._pattern: re.Pattern[str] | None = None
         self._direction = 1
@@ -116,7 +122,8 @@ class Pager(Vertical, can_focus=True):
             yield PagerSearchInput()
 
     def on_mount(self) -> None:
-        self.focus()
+        # Do not queue focus behind the first navigation key.
+        self.screen.set_focus(self, scroll_visible=False)
 
     async def load(self) -> None:
         log = self.query_one(PagerLog)
@@ -128,13 +135,19 @@ class Pager(Vertical, can_focus=True):
             self.error = error
             self.closed.set()
         else:
+            self._eof = True
             # EOF can arrive before RichLog has its first layout. Only advertise
             # readiness after the frame that lays out and renders the content.
             self.call_after_refresh(self._mark_loaded)
 
     def _mark_loaded(self) -> None:
-        if self.is_mounted:
-            self.loaded = True
+        if self.is_mounted and self._eof:
+            region = self.query_one(PagerLog).scrollable_content_region
+            if region.width > 0 and region.height > 0:
+                if not self.loaded and not self._searching:
+                    # Finish the keyboard handoff before advertising readiness.
+                    self.screen.set_focus(self, scroll_visible=False)
+                self.loaded = True
 
     def action_next_page(self) -> None:
         self._match_line = None

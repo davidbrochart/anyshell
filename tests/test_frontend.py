@@ -155,7 +155,7 @@ async def test_inline_scrollback_stays_put_until_command_finishes():
         await wait_until(lambda: any(e.value == "later output" for e in shell.output))
         await pilot.pause()
         assert viewport.scroll_y == 0
-        assert command_input.region.y > viewport.content_region.bottom
+        assert not shell.query_one("#command-line").display
         finish.set()
         await wait_until(lambda: not shell._busy)
         await wait_until(
@@ -333,3 +333,261 @@ async def test_help_fits_transcript_width_after_resize(prompt_position):
             ]
             assert rendered[1:] == expected
             assert "--long" in "\n".join(rendered)
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_foreground_hides_prompt_until_completion_or_cancellation(
+    prompt_position,
+):
+    from anyshell import Command
+
+    started = anyio.Event()
+    release = anyio.Event()
+
+    async def hold():
+        started.set()
+        await release.wait()
+
+    session = Session()
+    session.register(Command("hold", "Wait for release", hold))
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        line = shell.query_one("#command-line")
+        editor.value = "hold"
+        await pilot.press("enter")
+        await wait_until(started.is_set)
+        assert shell._busy and not line.display
+        assert not editor.has_focus
+        from anyshell.frontend import RunningCursor
+
+        cursor = shell.query_one(RunningCursor)
+        await wait_until(lambda: cursor.display and cursor.has_focus)
+        await wait_until(lambda: app.cursor_position == cursor.cursor_screen_offset)
+        await wait_until(lambda: not cursor._draw_cursor)
+        await wait_until(lambda: cursor._draw_cursor)
+        if prompt_position == "inline":
+            from anytext.widgets import RichLog
+
+            assert cursor.region.y == shell.query_one(RichLog).region.bottom
+        await pilot.press("x", "enter")
+        assert editor.value == ""
+        release.set()
+        await wait_until(lambda: not shell._busy and line.display and editor.has_focus)
+        assert line.display and editor.has_focus
+        assert not cursor.display
+        editor.value = "sleep 30"
+        await pilot.press("enter")
+        await wait_until(lambda: session.running)
+        assert not line.display
+        await pilot.press("ctrl+c")
+        await wait_until(lambda: not shell._busy and line.display and editor.has_focus)
+        assert session.last_status == 130
+        assert line.display and editor.has_focus
+        editor.value = "sleep 30 &"
+        await pilot.press("enter")
+        await wait_until(
+            lambda: bool(session.jobs) and not shell._busy and editor.has_focus
+        )
+        assert session.jobs[1].result is None
+        assert line.display and editor.has_focus
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_enter_on_empty_prompt_advances_line(prompt_position):
+    from anytext.widgets import RichLog
+
+    session = Session()
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        transcript = app.query_one(RichLog)
+        await pilot.pause()
+        original_y = editor.region.y
+        for text in ("", "   ", ""):
+            editor.value = text
+            await pilot.press("enter")
+        await pilot.pause()
+        assert [line.text.strip() for line in transcript.lines] == ["/ ❯"] * 3
+        assert editor.value == "" and editor.has_focus
+        assert not shell._busy and not session.running
+        assert session.history == []
+        if prompt_position == "inline":
+            assert editor.region.y == original_y + 3
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+@pytest.mark.parametrize("file_count", [100, 400])
+@pytest.mark.parametrize("size", [(60, 12), (35, 8)])
+async def test_long_listing_restores_visible_prompt_cursor(
+    prompt_position, file_count, size
+):
+    session = Session(
+        MemoryFileSystem({f"file-{i:03}.txt": "data" for i in range(file_count)})
+    )
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test(size=size) as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        for _ in range(2):
+            editor.value = "ls -l"
+            await pilot.press("enter")
+            await wait_until(lambda: not shell._busy)
+            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    editor.has_focus
+                    and shell.content_region.contains_region(editor.region)
+                    and app.cursor_position == editor.cursor_screen_offset
+                )
+            )
+            if prompt_position == "inline":
+                from anyshell.frontend import ShellScroll
+
+                assert shell.query_one(ShellScroll).is_vertical_scroll_end
+            await pilot.press("x")
+            assert editor.value == "x"
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_mouse_selection_and_copy_of_output(prompt_position):
+    from anyshell.frontend import Transcript
+
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test(size=(80, 20)) as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        editor.value = "echo hello world"
+        await pilot.press("enter")
+        await wait_until(lambda: not shell._busy)
+        await pilot.pause()
+        log = shell.query_one(Transcript)
+        await pilot.mouse_down(log, offset=(1, 1))
+        await pilot.hover(log, offset=(5, 1))
+        await pilot.mouse_up(log, offset=(5, 1))
+        await wait_until(lambda: app.screen.get_selected_text() == "hello")
+        await wait_until(lambda: editor.has_focus)
+        await pilot.press("ctrl+c")
+        assert app.clipboard == "hello"
+        assert editor.has_focus
+
+
+async def test_output_selection_handles_unicode_and_multiple_lines():
+    from anyshell.frontend import Transcript
+
+    app = ShellApp()
+    async with app.run_test(size=(80, 20)) as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        editor.value = "echo 'a界bé\nsecond line'"
+        await pilot.press("enter")
+        await wait_until(lambda: not shell._busy)
+        await pilot.pause()
+        log = shell.query_one(Transcript)
+        # The two-line submitted command occupies rows 0 and 1.
+        await pilot.mouse_down(log, offset=(2, 2))
+        await pilot.hover(log, offset=(3, 3))
+        await pilot.mouse_up(log, offset=(3, 3))
+        await wait_until(lambda: app.screen.get_selected_text() == "界bé\nsec")
+        await pilot.press("ctrl+shift+c")
+        assert app.clipboard == "界bé\nsec"
+
+
+@pytest.mark.parametrize("text_style", ["", "white", "bold white", "blue", "dim red"])
+async def test_selection_changes_only_background(text_style):
+    from anytext.geometry import Offset
+    from anytext.selection import Selection
+    from rich.text import Text
+
+    from anyshell.frontend import Transcript
+
+    app = ShellApp()
+    async with app.run_test() as pilot:
+        log = app.query_one(Transcript)
+        log.write(Text("white text", style=text_style))
+        await pilot.pause()
+        original = next(
+            segment.style for segment in log.render_line(0) if "white" in segment.text
+        )
+        app.screen.selections = {log: Selection(Offset(0, 0), Offset(5, 0))}
+        await pilot.pause()
+        segments = list(log.render_line(0))
+        selected = next(segment for segment in segments if segment.text == "white")
+        unselected = next(segment for segment in segments if "text" in segment.text)
+        highlight = app.screen.get_component_rich_style("screen--selection")
+        assert selected.style.color == original.color
+        assert selected.style.bold == original.bold
+        assert selected.style.dim == original.dim
+        assert selected.style.bgcolor == highlight.bgcolor
+        assert selected.style.bgcolor != original.bgcolor
+        assert unselected.style.color == original.color
+        assert unselected.style.bgcolor == original.bgcolor
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_terminal_clicks_keep_active_cursor_focus(prompt_position):
+    from anyshell.frontend import RunningCursor, Transcript
+
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test(size=(80, 20)) as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        editor.value = "echo hello"
+        await pilot.press("enter")
+        await wait_until(lambda: not shell._busy)
+        for target, offset in (
+            ("#shell-terminal", (30, 8)),
+            ("#prompt", (0, 0)),
+            (Shell, (0, 0)),
+            (Transcript, (2, 1)),
+        ):
+            await pilot.click(target, offset=offset)
+            await wait_until(lambda: editor.has_focus)
+            await pilot.press("x")
+            assert editor.value == "x"
+            editor.value = ""
+        editor.value = "sleep 30"
+        await pilot.press("enter")
+        await wait_until(lambda: shell.session.running)
+        cursor = shell.query_one(RunningCursor)
+        await pilot.click("#shell-terminal", offset=(30, 8))
+        await wait_until(lambda: cursor.has_focus)
+        await wait_until(lambda: not cursor._draw_cursor)
+        await wait_until(lambda: cursor._draw_cursor)
+        await pilot.press("ctrl+c")
+        await wait_until(lambda: not shell._busy)
+        assert editor.has_focus
+
+
+async def test_manual_scrollback_cancels_pending_prompt_scroll():
+    from anyshell.frontend import ShellScroll, Transcript
+
+    app = ShellApp(
+        Session(
+            MemoryFileSystem({"many.txt": "\n".join(f"line {i}" for i in range(80))})
+        )
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        viewport = shell.query_one(ShellScroll)
+        editor.value = "cat many.txt"
+        await pilot.press("enter")
+        await wait_until(lambda: not shell._busy and viewport.is_vertical_scroll_end)
+        await pilot.pause()
+        # A command's final scroll request may still be queued when the user scrolls up.
+        shell._request_prompt_scroll()
+        viewport.scroll_home(animate=False, immediate=True)
+        await pilot.pause()
+        assert viewport.scroll_y == 0
+        # Late layout and output updates must respect the user's chosen position.
+        viewport.on_resize()
+        shell.query_one(Transcript).write("later output")
+        await pilot.pause()
+        assert viewport.scroll_y == 0
+        assert editor.region.y > viewport.content_region.bottom
+        await pilot.press("x")
+        await wait_until(lambda: viewport.is_vertical_scroll_end)
+        assert editor.value == "x"

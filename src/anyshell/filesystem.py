@@ -22,7 +22,7 @@ class FileSystem(Protocol):
     def mkdir(self, path: str) -> None: ...
     def rmdir(self, path: str) -> None: ...
     def touch(self, path: str) -> None: ...
-    def remove(self, path: str) -> None: ...
+    def remove(self, path: str, *, recursive: bool = False) -> None: ...
     def move(self, source: str, destination: str) -> None: ...
     def copy(
         self, source: str, destination: str, *, recursive: bool = False
@@ -132,7 +132,7 @@ class LocalFileSystem:
     def touch(self, path: str) -> None:
         self._path(path).touch()
 
-    def remove(self, path: str) -> None:
+    def remove(self, path: str, *, recursive: bool = False) -> None:
         unresolved = self.root / path.lstrip("/")
         if unresolved.is_symlink():
             if not unresolved.parent.resolve().is_relative_to(self.root):
@@ -143,8 +143,11 @@ class LocalFileSystem:
         if candidate == self.root:
             raise PermissionError("cannot remove the workspace root")
         if candidate.is_dir():
-            raise IsADirectoryError(path)
-        candidate.unlink()
+            if not recursive:
+                raise IsADirectoryError(path)
+            shutil.rmtree(candidate)
+        else:
+            candidate.unlink()
 
     def move(self, source: str, destination: str) -> None:
         _validate_transfer(self, source, destination)
@@ -293,13 +296,20 @@ class MemoryFileSystem:
         else:
             self.write_text(path, "")
 
-    def remove(self, path: str) -> None:
+    def remove(self, path: str, *, recursive: bool = False) -> None:
         if path == "/":
             raise PermissionError("cannot remove the workspace root")
         if path in self.files:
             del self.files[path]
         elif path in self.directories:
-            raise IsADirectoryError(path)
+            if not recursive:
+                raise IsADirectoryError(path)
+            for child in list(self._modified):
+                if child.startswith(path + "/"):
+                    self.files.pop(child, None)
+                    self.directories.discard(child)
+                    self._modified.pop(child, None)
+            self.directories.remove(path)
         else:
             raise FileNotFoundError(path)
         self._modified.pop(path, None)

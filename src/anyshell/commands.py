@@ -6,7 +6,7 @@ import json
 import math
 import posixpath
 import re
-from contextlib import aclosing
+from contextlib import ExitStack, aclosing
 from fnmatch import fnmatchcase
 from typing import Annotated, Literal
 
@@ -291,18 +291,35 @@ async def write(path: str, *text: str, ctx: Context):
     ctx.fs.write_text(ctx.resolve(path), " ".join(text) + "\n")
 
 
-@builtin("rm", "Remove files. Use rmdir for empty directories.", standalone=True)
-async def rm(path: str, *paths: str, ctx: Context):
+@builtin("rm", "Remove files, or directory trees with -r.", standalone=True)
+async def rm(
+    *paths: str,
+    recursive: Annotated[
+        bool,
+        Parameter(name=["--recursive", "-r", "-R"], help="Remove directory trees."),
+    ] = False,
+    force: Annotated[
+        bool,
+        Parameter(name=["--force", "-f"], help="Ignore missing paths and operands."),
+    ] = False,
+    ctx: Context,
+):
+    if not paths and not force:
+        raise ShellError("missing path")
     errors = []
-    for name in (path, *paths):
+    for name in paths:
         try:
-            ctx.fs.remove(ctx.resolve(name))
+            if recursive:
+                ctx.fs.remove(ctx.resolve(name), recursive=True)
+            else:
+                ctx.fs.remove(ctx.resolve(name))
         except IsADirectoryError:
             errors.append(
                 f"{name!r} is a directory; use rmdir to remove an empty directory"
             )
         except FileNotFoundError:
-            errors.append(f"{name!r}: no such file")
+            if not force:
+                errors.append(f"{name!r}: no such file")
         except OSError as error:
             errors.append(f"{name!r}: {error}")
         await anyio.lowlevel.checkpoint()
@@ -356,24 +373,36 @@ async def less(*files: str, ctx: Context, stdin):
 async def _page(files: tuple[str, ...], ctx: Context, stdin, *, searchable: bool):
     from .presentation import format_value
 
-    async def lines():
-        if files:
-            for name in files:
-                for line in ctx.fs.read_lines(ctx.resolve(name)):
-                    yield line
-        else:
-            async for value in stdin:
-                yield format_value(value)
+    with ExitStack() as stack:
+        sources = []
+        for name in files:
+            source = iter(ctx.fs.read_lines(ctx.resolve(name)))
+            if (close := getattr(source, "close", None)) is not None:
+                stack.callback(close)
+            # Opening and reading once catches missing paths, permissions and
+            # initial decoding errors before a frontend can display the pager.
+            sources.append((next(source, None), source))
 
-    async with aclosing(lines()) as stream:
-        request = PageRequest(
-            " · ".join(files) if files else "Pipeline output",
-            stream,
-            searchable=searchable,
-        )
-        await ctx.emit(Event("page", request))
-        if not request.handled:
-            raise ShellError("an interactive frontend is required to page text")
+        async def lines():
+            if files:
+                for first, source in sources:
+                    if first is not None:
+                        yield first
+                    for line in source:
+                        yield line
+            else:
+                async for value in stdin:
+                    yield format_value(value)
+
+        async with aclosing(lines()) as stream:
+            request = PageRequest(
+                " · ".join(files) if files else "Pipeline output",
+                stream,
+                searchable=searchable,
+            )
+            await ctx.emit(Event("page", request))
+            if not request.handled:
+                raise ShellError("an interactive frontend is required to page text")
 
 
 @builtin("edit", "Open a text file in the interactive editor.", standalone=True)
@@ -390,8 +419,31 @@ async def clear(*, ctx: Context):
 
 
 @builtin("sleep", "Wait asynchronously; Ctrl+C cancels.")
-async def sleep(seconds: float, *, stdout):
+async def sleep(seconds: float):
     if not math.isfinite(seconds) or seconds < 0:
         raise ShellError("seconds must be finite and nonnegative")
     await anyio.sleep(seconds)
-    await stdout.send(f"slept {seconds:g}s")
+
+
+@builtin("jobs", "List background jobs.")
+async def jobs(*, ctx: Context, stdout):
+    for job in list(ctx.session.jobs.values()):
+        completed = job.result is not None
+        state = f"done ({job.result.status})" if completed else "running"
+        await stdout.send(f"[{job.id}] {state}  {job.source}")
+        if completed:
+            ctx.session.jobs.pop(job.id, None)
+
+
+@builtin("wait", "Wait for one or all background jobs.", standalone=True)
+async def wait(job: int | None = None, *, ctx: Context):
+    status = await ctx.session.wait_jobs(job)
+    if status:
+        raise ShellError(f"background job exited with status {status}")
+
+
+@builtin("kill", "Cancel a background job.", standalone=True)
+async def kill(job: int, *, ctx: Context):
+    entry = ctx.session.get_job(job)
+    if entry.scope is not None:
+        entry.scope.cancel()

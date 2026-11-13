@@ -42,6 +42,12 @@ def main() -> None:
 
         async def emit(event: Event) -> None:
             nonlocal long_header
+            if event.kind == "job":
+                job = event.value
+                state = (
+                    "running" if job.result is None else f"done ({job.result.status})"
+                )
+                print(f"[{job.id}] {state}  {job.source}", file=sys.stderr)
             if event.kind in {"output", "error"}:
                 if event.kind == "output" and is_long_file_record(event.value):
                     if not long_header:
@@ -55,11 +61,12 @@ def main() -> None:
                 )
 
         async def execute() -> int:
-            return (
-                await session.execute(
+            async with session.background():
+                result = await session.execute(
                     args.command, emit, output_width=get_terminal_size((88, 24)).columns
                 )
-            ).status
+                await session.wait_jobs()
+                return result.status
 
         try:
             status = anyio.run(execute, backend=args.backend)

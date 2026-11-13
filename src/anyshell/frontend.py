@@ -20,6 +20,7 @@ from rich.text import Text
 
 from .editor import FileEditor
 from .engine import Event, Session, is_complete
+from .log import SelectableLog
 from .pager import Pager
 from .presentation import (
     LONG_FILE_HEADERS,
@@ -103,6 +104,12 @@ class CommandInput(TextArea):
     def on_resize(self) -> None:
         self.call_after_refresh(self.resize_editor)
 
+    def render_lines(self, crop):
+        if self.has_focus:
+            # Paint happens after layout, even when cached lines are reused.
+            self.app.cursor_position = self.cursor_screen_offset
+        return super().render_lines(crop)
+
     @property
     def shell(self) -> Shell:
         return self.query_ancestor(Shell)
@@ -155,14 +162,70 @@ class CommandInput(TextArea):
         self.shell.cancel()
 
 
+class RunningCursor(TextArea):
+    """A blank, read-only cursor line while a foreground command owns input."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            id="running-cursor",
+            read_only=True,
+            show_line_numbers=False,
+            highlight_cursor_line=False,
+        )
+
+    @property
+    def _draw_cursor(self) -> bool:
+        # TextArea normally renders read-only cursors steadily. Keep its blink
+        # timer visible here while retaining read-only input protection.
+        return (
+            self.has_focus
+            and self.show_cursor
+            and (not self.cursor_blink or self._cursor_visible)
+        )
+
+    def position_cursor(self) -> None:
+        if self.has_focus:
+            self.app.cursor_position = self.cursor_screen_offset
+            self.refresh()
+
+    def on_focus(self) -> None:
+        self.call_after_refresh(self.position_cursor)
+
+    def on_resize(self) -> None:
+        self.call_after_refresh(self.position_cursor)
+
+    def on_key(self, event: events.Key) -> None:
+        event.stop()
+        event.prevent_default()
+        if event.key == "ctrl+c":
+            self.query_ancestor(Shell).cancel()
+
+
 class ShellScroll(VerticalScroll, can_focus=False):
     """One scrollback area containing both the transcript and the active prompt."""
 
+    _follow_prompt = True
 
-class Transcript(RichLog, can_focus=False):
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        if self.is_mounted:
+            shell = self.query_ancestor(Shell)
+            if new_value < old_value:
+                self._follow_prompt = False
+                shell._cancel_prompt_scroll()
+            self.call_after_refresh(shell._position_prompt_cursor)
+
+    def on_resize(self) -> None:
+        shell = self.query_ancestor(Shell)
+        if self._follow_prompt and not shell._busy:
+            shell._request_prompt_scroll()
+
+
+class Transcript(SelectableLog, can_focus=False):
     def __init__(self, *, inline_prompt: bool, **kwargs) -> None:
         super().__init__(**kwargs)
         self.inline_prompt = inline_prompt
+        self._last_output_width = 0
 
     def write(
         self,
@@ -173,6 +236,12 @@ class Transcript(RichLog, can_focus=False):
         scroll_end=None,
         animate=False,
     ):
+        available = self.scrollable_content_region.width
+        if available > 0:
+            self._last_output_width = available
+        elif width is None and self._last_output_width > 0:
+            # Pager/editor teardown can emit before the restored pane is laid out.
+            width = self._last_output_width
         follow = (
             self.inline_prompt
             and self.parent is not None
@@ -192,6 +261,11 @@ class Transcript(RichLog, can_focus=False):
                 self.query_ancestor(Shell)._request_prompt_scroll()
         return result
 
+    def on_mouse_up(self) -> None:
+        shell = self.query_ancestor(Shell)
+        target = shell.query_one(RunningCursor if shell._busy else CommandInput)
+        target.focus(scroll_visible=False)
+
     def clear(self):
         result = super().clear()
         if self.inline_prompt:
@@ -199,8 +273,13 @@ class Transcript(RichLog, can_focus=False):
         return result
 
 
-class Shell(Vertical):
+class Shell(Vertical, can_focus=True):
     """Embeddable shell UI. Supply a session to retain state across remounts."""
+
+    BINDINGS = [
+        Binding("ctrl+c", "cancel", show=False),
+        Binding("ctrl+shift+c,super+c", "copy_selection", show=False, priority=True),
+    ]
 
     DEFAULT_CSS = """
     Shell CompletionPopup {
@@ -218,6 +297,10 @@ class Shell(Vertical):
     Shell #shell-terminal { height: 1fr; }
     Shell RichLog { height: 1fr; padding: 0 1; }
     Shell.bottom-prompt Transcript { scrollbar-gutter: stable; }
+    Shell #running-cursor, Shell #running-cursor:focus {
+        display: none; height: 1; min-height: 1;
+        border: none; padding: 0 1; margin: 0; background: $surface;
+    }
     Shell #command-line { height: 3; }
     Shell #prompt { width: auto; padding: 1 0 0 1; }
     Shell CommandInput, Shell CommandInput:focus {
@@ -249,6 +332,7 @@ class Shell(Vertical):
         self.set_class(prompt_position == "inline", "inline-prompt")
         self.set_class(prompt_position == "bottom", "bottom-prompt")
         self._prompt_scroll_pending = False
+        self._prompt_scroll_generation = 0
         self.session = session if session is not None else Session()
         self._history_index = len(self.session.history)
         self._draft = ""
@@ -257,6 +341,10 @@ class Shell(Vertical):
         self._file_rows: list[dict] = []
         self._completions: list[str] = []
         self._completion_source: str | None = None
+
+    def focus_on_click(self) -> bool:
+        # Blank space and non-focusable output must not steal the active cursor.
+        return False
 
     @property
     def prompt_position(self) -> Literal["inline", "bottom"]:
@@ -274,6 +362,7 @@ class Shell(Vertical):
         with Horizontal(id="command-line"):
             yield Static(f"{self.session.cwd} ❯", id="prompt")
             yield CommandInput()
+        yield RunningCursor()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="shell-terminal"):
@@ -284,15 +373,53 @@ class Shell(Vertical):
                 yield from self._compose_terminal()
             yield CompletionPopup()
 
-    def _request_prompt_scroll(self) -> None:
-        if self.prompt_position == "inline" and not self._prompt_scroll_pending:
-            self._prompt_scroll_pending = True
-            self.call_after_refresh(self._show_prompt)
+    def _cancel_prompt_scroll(self) -> None:
+        self._prompt_scroll_generation += 1
+        self._prompt_scroll_pending = False
 
-    def _show_prompt(self) -> None:
+    def _request_prompt_scroll(self) -> None:
+        if self.prompt_position == "inline":
+            self.query_one(ShellScroll)._follow_prompt = True
+        if not self._prompt_scroll_pending:
+            self._prompt_scroll_pending = True
+            self.call_after_refresh(self._show_prompt, self._prompt_scroll_generation)
+
+    def _show_prompt(self, generation: int) -> None:
+        if generation != self._prompt_scroll_generation:
+            return
         self._prompt_scroll_pending = False
         if self.is_mounted:
-            self.query_one(CommandInput).scroll_visible(animate=False, immediate=True)
+            if self._busy:
+                if self.prompt_position == "inline":
+                    self.query_one(ShellScroll).scroll_end(
+                        animate=False, immediate=True
+                    )
+                self.query_one(RunningCursor).position_cursor()
+            else:
+                if self.prompt_position == "inline":
+                    viewport = self.query_one(ShellScroll)
+                    viewport.anchor(
+                        len(self.query_one(Transcript).lines) + 1
+                        > viewport.scrollable_content_region.height
+                    )
+                    viewport.scroll_end(
+                        animate=False,
+                        force=True,
+                        immediate=True,
+                        on_complete=self._position_prompt_cursor,
+                    )
+                else:
+                    self.query_one(CommandInput).scroll_visible(
+                        animate=False, immediate=True
+                    )
+                    self.call_after_refresh(self._position_prompt_cursor)
+
+    def _position_prompt_cursor(self) -> None:
+        if self.is_mounted and not self._busy:
+            editor = self.query_one(CommandInput)
+            if editor.has_focus:
+                self.app.cursor_position = editor.cursor_screen_offset
+                editor.refresh()
 
     @on(TextArea.Changed)
     def input_changed(self, event: TextArea.Changed) -> None:
@@ -312,15 +439,38 @@ class Shell(Vertical):
         self._request_prompt_scroll()
 
     def on_mount(self) -> None:
-        self.query_one(CommandInput).focus()
+        self._jobs_ready = anyio.Event()
+        self.run_worker(self._background_jobs(), name="shell-jobs")
+        self.query_one(CommandInput).focus(scroll_visible=False)
         self._request_prompt_scroll()
+
+    async def _background_jobs(self) -> None:
+        async with self.session.background():
+            self._jobs_ready.set()
+            await anyio.sleep_forever()
 
     @on(CommandInput.Submitted)
     def submitted(self, event: CommandInput.Submitted) -> None:
         event.stop()
-        if self._busy or not event.value.strip():
+        if self._busy:
+            return
+        if not event.value.strip():
+            self.dismiss_completion()
+            event.input.value = ""
+            self._history_index = len(self.session.history)
+            self._draft = ""
+            self._flush_file_rows()
+            self.query_one(RichLog).write(
+                Text(f"{self.session.cwd} ❯", style="bold cyan")
+            )
+            self._request_prompt_scroll()
             return
         self._busy = True
+        self.dismiss_completion()
+        self.query_one("#command-line").display = False
+        cursor = self.query_one(RunningCursor)
+        cursor.display = True
+        cursor.focus(scroll_visible=False)
         source = event.value
         event.input.value = ""
         self.query_one(RichLog).write(
@@ -332,6 +482,7 @@ class Shell(Vertical):
 
     async def _execute(self, source: str) -> None:
         try:
+            await self._jobs_ready.wait()
             width = max(1, self.query_one(RichLog).scrollable_content_region.width)
             await self.session.execute(source, self.receive, output_width=width)
         finally:
@@ -339,6 +490,9 @@ class Shell(Vertical):
             self._history_index = len(self.session.history)
             self._draft = ""
             self.query_one("#prompt", Static).update(f"{self.session.cwd} ❯")
+            self.query_one(RunningCursor).display = False
+            self.query_one("#command-line").display = True
+            self.query_one(CommandInput).focus(scroll_visible=False)
             self._request_prompt_scroll()
 
     def _flush_file_rows(self) -> None:
@@ -401,7 +555,7 @@ class Shell(Vertical):
                     await view.remove()
                 terminal.disabled = False
                 terminal.display = True
-                self.query_one(CommandInput).focus()
+                self.query_one(CommandInput).focus(scroll_visible=False)
                 self._request_prompt_scroll()
         elif event.kind == "clear":
             self._file_rows.clear()
@@ -418,6 +572,12 @@ class Shell(Vertical):
                 self._flush_file_rows()
         else:
             self._flush_file_rows()
+            if event.kind == "job":
+                job = event.value
+                state = (
+                    "running" if job.result is None else f"done ({job.result.status})"
+                )
+                transcript.write(Text(f"[{job.id}] {state}  {job.source}"))
             if event.kind in {"output", "error"}:
                 transcript.write(
                     Text(
@@ -426,9 +586,18 @@ class Shell(Vertical):
                     )
                 )
 
+    def action_cancel(self) -> None:
+        self.cancel()
+
+    def action_copy_selection(self) -> None:
+        self.screen.action_copy_text()
+
     def cancel(self) -> None:
         if not self.session.cancel():
-            self.query_one(CommandInput).value = ""
+            if self.screen.get_selected_text():
+                self.screen.action_copy_text()
+            else:
+                self.query_one(CommandInput).value = ""
 
     def history_move(self, delta: int) -> None:
         command_input = self.query_one(CommandInput)
@@ -513,7 +682,7 @@ class Shell(Vertical):
         if isinstance(event.option_list, CompletionMenu):
             event.stop()
             self.accept_completion()
-            self.query_one(CommandInput).focus()
+            self.query_one(CommandInput).focus(scroll_visible=False)
 
 
 class ShellApp(App, inherit_bindings=False):
