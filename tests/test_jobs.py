@@ -154,8 +154,8 @@ async def test_frontend_background_prompt_and_shutdown(prompt_position):
 
 async def test_completion_after_background_separator():
     session = Session()
-    assert await session.complete("sleep 30 & ec") == ["sleep 30 & echo"]
-    assert await session.complete("sleep 30 &\n ec") == ["sleep 30 &\n echo"]
+    assert await session.complete("sleep 30 & ec") == ["sleep 30 & echo "]
+    assert await session.complete("sleep 30 &\n ec") == ["sleep 30 &\n echo "]
 
 
 def test_headless_background_jobs_finish():

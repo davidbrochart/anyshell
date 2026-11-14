@@ -58,10 +58,10 @@ async def test_multiline_sequences_continuations_and_history():
 
 async def test_multiline_completion_context():
     session = Session(MemoryFileSystem({"file.txt": ""}))
-    assert await session.complete("echo first\nec") == ["echo first\necho"]
-    assert "echo first\nls" in await session.complete("echo first\n")
+    assert await session.complete("echo first\nec") == ["echo first\necho "]
+    assert "echo first\nls " in await session.complete("echo first\n")
     assert await session.complete("ls \\\n --lo") == ["ls \\\n --long"]
-    assert await session.complete("echo hi |\n co") == ["echo hi |\n count"]
+    assert await session.complete("echo hi |\n co") == ["echo hi |\n count "]
     assert await session.complete("ls fi\\\nle") == []
 
 
@@ -166,9 +166,9 @@ async def test_semicolon_sequences_status_validation_and_completion():
     assert result.status == 0 and output == ["recovered"]
     result, output = await execute(session, "echo before; sleep invalid")
     assert result.status == 1 and output == []
-    assert await session.complete("sleep 1; ec") == ["sleep 1; echo"]
+    assert await session.complete("sleep 1; ec") == ["sleep 1; echo "]
     assert await session.complete("echo first;") == [
-        "echo first;" + name for name in sorted(session.commands)
+        "echo first;" + name + " " for name in sorted(session.commands)
     ]
 
 

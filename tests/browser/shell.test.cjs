@@ -170,8 +170,8 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('Shell').completion_open"));
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value == 'sleep' and not browser_app.query_one('Shell').completion_open"));
-    assert.equal(await python("browser_app.query_one('CommandInput').value"), 'sleep');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value == 'sleep ' and browser_app.query_one('CommandInput').cursor_position == 6 and not browser_app.query_one('Shell').completion_open"));
+    assert.equal(await python("browser_app.query_one('CommandInput').value"), 'sleep ');
     await page.keyboard.press('Control+c');
     await command('touch created.txt');
     assert.equal(await python("session.filesystem.stat('/created.txt')['size']"), 0);

@@ -87,7 +87,7 @@ async def test_errors_and_recovery(filesystem):
 
 async def test_completion_and_history(filesystem):
     session = Session(filesystem)
-    assert await session.complete("ec") == ["echo"]
+    assert await session.complete("ec") == ["echo "]
     assert await session.complete("cat not") == ["cat notes.txt"]
     assert await session.complete("cd do") == ["cd docs/"]
     assert await session.complete("cd ") == ["cd docs/"]
@@ -101,7 +101,7 @@ async def test_completion_and_history(filesystem):
     assert await session.complete("cd /not") == []
     await execute(session, "cd /")
     session.history.clear()
-    assert await session.complete("cat notes.txt | co") == ["cat notes.txt | count"]
+    assert await session.complete("cat notes.txt | co") == ["cat notes.txt | count "]
     await execute(session, "echo first")
     await execute(session, "echo first")
     await execute(session, "pwd")

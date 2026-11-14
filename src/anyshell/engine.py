@@ -515,7 +515,7 @@ class Session:
             return []  # A word split by backslash-newline has no contiguous suffix.
         if is_command:
             return [
-                source[:start] + name
+                source[:start] + name + " "
                 for name in sorted(self.commands)
                 if name.startswith(prefix)
             ]
