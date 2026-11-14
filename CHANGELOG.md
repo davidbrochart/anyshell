@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.2.1 — 2026-11-14
+
+- Append a space after completed command names, ready for arguments.
+
+- Preserve the current job list in background commands so `jobs &` lists
+  existing running tasks.
+
+- Skip pending editor repaints during teardown to avoid accessing cleared styles.
+
+- Keep a space between the bottom prompt and cursor.
+
 - List only running background tasks in `jobs`, keeping automatic launch and
   completion notifications.
 
