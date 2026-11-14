@@ -489,3 +489,50 @@ async def test_two_path_os_errors_keep_workspace_paths(filesystem):
         format_filesystem_error(error, filesystem)
         == "'/notes.txt' -> '/missing/new.txt': no such file or directory"
     )
+
+
+@pytest.mark.parametrize("operation", ["read_text", "read_lines", "write_text"])
+@pytest.mark.parametrize("path", ["/", "/docs"])
+def test_directory_text_io_is_portable_on_windows(
+    tmp_path, monkeypatch, operation, path
+):
+    import errno
+
+    (tmp_path / "docs").mkdir()
+    fs = LocalFileSystem(tmp_path)
+    original_open = Path.open
+
+    def windows_open(candidate, *args, **kwargs):
+        if candidate.is_dir():
+            raise PermissionError(errno.EACCES, "Permission denied", str(candidate))
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", windows_open)
+    with pytest.raises(IsADirectoryError):
+        if operation == "write_text":
+            fs.write_text(path, "contents")
+        elif operation == "read_lines":
+            list(fs.read_lines(path))
+        else:
+            fs.read_text(path)
+
+
+@pytest.mark.parametrize("operation", ["read_text", "read_lines", "write_text"])
+def test_genuine_file_permission_errors_are_preserved(tmp_path, monkeypatch, operation):
+    import errno
+
+    (tmp_path / "file.txt").write_text("contents")
+    fs = LocalFileSystem(tmp_path)
+
+    def denied_open(candidate, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied", str(candidate))
+
+    monkeypatch.setattr(Path, "open", denied_open)
+    with pytest.raises(PermissionError) as caught:
+        if operation == "write_text":
+            fs.write_text("/file.txt", "contents")
+        elif operation == "read_lines":
+            list(fs.read_lines("/file.txt"))
+        else:
+            fs.read_text("/file.txt")
+    assert caught.value.errno == errno.EACCES

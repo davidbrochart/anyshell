@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject directories explicitly during local text I/O so Windows reports
+  `is a directory` consistently, while preserving genuine permission errors.
+
 - Format common filesystem errors centrally for all commands, using workspace
   paths and consistent messages instead of host paths and OS errno text.
 

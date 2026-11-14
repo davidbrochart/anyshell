@@ -75,6 +75,13 @@ class LocalFileSystem:
             raise PermissionError("path leaves the workspace")
         return candidate
 
+    def _file_path(self, path: str) -> Path:
+        candidate = self._path(path)
+        # Windows reports opening a directory as PermissionError, unlike Unix.
+        if candidate.is_dir():
+            raise IsADirectoryError(path)
+        return candidate
+
     def is_dir(self, path: str) -> bool:
         return self._path(path).is_dir()
 
@@ -106,16 +113,16 @@ class LocalFileSystem:
         }
 
     def read_text(self, path: str) -> str:
-        with self._path(path).open(encoding="utf-8", newline="") as stream:
+        with self._file_path(path).open(encoding="utf-8", newline="") as stream:
             return stream.read()
 
     def read_lines(self, path: str) -> Iterator[str]:
-        with self._path(path).open(encoding="utf-8") as stream:
+        with self._file_path(path).open(encoding="utf-8") as stream:
             for line in stream:
                 yield line.rstrip("\r\n")
 
     def write_text(self, path: str, text: str) -> None:
-        self._path(path).write_text(text, encoding="utf-8", newline="")
+        self._file_path(path).write_text(text, encoding="utf-8", newline="")
 
     def mkdir(self, path: str) -> None:
         self._path(path).mkdir()
