@@ -21,7 +21,15 @@ async def test_submit_completion_history_and_cancellation(prompt_position):
         command_input.value = "ec"
         command_input.cursor_position = 2
         await pilot.press("tab")
-        assert command_input.value == "echo"
+        assert command_input.value == "echo "
+        assert command_input.cursor_position == len("echo ")
+        command_input.value = "c"
+        command_input.cursor_position = 1
+        await pilot.press("tab")
+        assert shell.completion_open
+        await pilot.press("enter")
+        assert command_input.value == "cat "
+        assert command_input.cursor_position == len("cat ")
         command_input.value = "cat hello.txt | count"
         await pilot.press("enter")
         await wait_until(lambda: any(e.kind == "status" for e in shell.output))
