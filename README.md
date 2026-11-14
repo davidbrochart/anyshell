@@ -376,8 +376,8 @@ Set `project.version` in `pyproject.toml`, update the lockfile with `uv lock`, a
 commit the release changes. Push a matching version tag, without a `v` prefix:
 
 ```sh
-git tag 0.1.0
-git push origin 0.1.0
+git tag 0.2.0
+git push origin 0.2.0
 ```
 
 The `release.yml` workflow checks that the tag matches the package version,

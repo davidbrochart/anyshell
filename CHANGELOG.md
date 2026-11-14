@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 — 2026-11-14
+
 - Cancel pending prompt auto-scroll when scrolling up, and preserve manual
   scrollback during later layout or output updates.
 
