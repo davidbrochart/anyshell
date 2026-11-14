@@ -57,7 +57,23 @@ class CommandInput(TextArea):
         Binding("ctrl+c", "cancel_command", show=False),
     ]
 
+    @property
+    def _draw_cursor(self) -> bool:
+        return (
+            self.has_focus
+            and self.show_cursor
+            and (not self.cursor_blink or self._cursor_visible)
+        )
+
     async def on_key(self, event: events.Key) -> None:
+        if self.shell._busy and not (
+            event.key == "ctrl+q" and self.shell.prompt_position == "bottom"
+        ):
+            event.stop()
+            event.prevent_default()
+            if event.key == "ctrl+c":
+                self.shell.cancel()
+            return
         # Handle editor shortcuts in the same queue as typed characters. App-level
         # priority bindings could submit before earlier edits have been applied.
         for binding in self.BINDINGS:
@@ -263,7 +279,11 @@ class Transcript(SelectableLog, can_focus=False):
 
     def on_mouse_up(self) -> None:
         shell = self.query_ancestor(Shell)
-        target = shell.query_one(RunningCursor if shell._busy else CommandInput)
+        target = shell.query_one(
+            RunningCursor
+            if shell._busy and shell.prompt_position == "inline"
+            else CommandInput
+        )
         target.focus(scroll_visible=False)
 
     def clear(self):
@@ -302,9 +322,17 @@ class Shell(Vertical, can_focus=True):
         border: none; padding: 0 1; margin: 0; background: $surface;
     }
     Shell #command-line { height: 3; }
-    Shell #prompt { width: auto; padding: 1 0 0 1; }
+    Shell #prompt { width: auto; padding: 1 0 0 1; margin-right: 1; }
     Shell CommandInput, Shell CommandInput:focus {
         width: 1fr; height: 1; border: none; padding: 0; margin: 1 0;
+    }
+    Shell CommandInput.-read-only:dark .text-area--cursor,
+    Shell RunningCursor.-read-only:dark .text-area--cursor {
+        background: $input-cursor-background;
+    }
+    Shell CommandInput.-read-only:light .text-area--cursor,
+    Shell RunningCursor.-read-only:light .text-area--cursor {
+        background: $foreground 70%;
     }
     Shell #shell-scroll { height: 1fr; background: $surface; scrollbar-gutter: stable; }
     Shell.inline-prompt RichLog { height: 0; min-height: 0; overflow: hidden hidden; }
@@ -312,7 +340,7 @@ class Shell(Vertical, can_focus=True):
         height: 1fr; min-height: 0; padding: 0 1; overflow: auto auto;
     }
     Shell.inline-prompt #command-line { height: 1; }
-    Shell.inline-prompt #prompt { padding: 0 0 0 1; margin-right: 1; }
+    Shell.inline-prompt #prompt { padding: 0 0 0 1; }
     Shell.inline-prompt CommandInput, Shell.inline-prompt CommandInput:focus {
         height: 1; border: none; padding: 0; margin: 0; background: $surface;
     }
@@ -467,10 +495,13 @@ class Shell(Vertical, can_focus=True):
             return
         self._busy = True
         self.dismiss_completion()
-        self.query_one("#command-line").display = False
-        cursor = self.query_one(RunningCursor)
-        cursor.display = True
-        cursor.focus(scroll_visible=False)
+        if self.prompt_position == "inline":
+            self.query_one("#command-line").display = False
+            cursor = self.query_one(RunningCursor)
+            cursor.display = True
+            cursor.focus(scroll_visible=False)
+        else:
+            event.input.read_only = True
         source = event.value
         event.input.value = ""
         self.query_one(RichLog).write(
@@ -492,6 +523,7 @@ class Shell(Vertical, can_focus=True):
             self.query_one("#prompt", Static).update(f"{self.session.cwd} ❯")
             self.query_one(RunningCursor).display = False
             self.query_one("#command-line").display = True
+            self.query_one(CommandInput).read_only = False
             self.query_one(CommandInput).focus(scroll_visible=False)
             self._request_prompt_scroll()
 

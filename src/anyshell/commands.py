@@ -440,14 +440,13 @@ async def sleep(seconds: float):
     await anyio.sleep(seconds)
 
 
-@builtin("jobs", "List background jobs.")
+@builtin("jobs", "List running background jobs.")
 async def jobs(*, ctx: Context, stdout):
     for job in list(ctx.session.jobs.values()):
-        completed = job.result is not None
-        state = f"done ({job.result.status})" if completed else "running"
-        await stdout.send(f"[{job.id}] {state}  {job.source}")
-        if completed:
+        if job.result is not None:
             ctx.session.jobs.pop(job.id, None)
+            continue
+        await stdout.send(f"[{job.id}] running  {job.source}")
 
 
 @builtin("wait", "Wait for one or all background jobs.", standalone=True)

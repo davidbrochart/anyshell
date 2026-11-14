@@ -336,7 +336,7 @@ async def test_help_fits_transcript_width_after_resize(prompt_position):
 
 
 @pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
-async def test_foreground_hides_prompt_until_completion_or_cancellation(
+async def test_foreground_prompt_state_until_completion_or_cancellation(
     prompt_position,
 ):
     from anyshell import Command
@@ -355,14 +355,25 @@ async def test_foreground_hides_prompt_until_completion_or_cancellation(
         shell = app.query_one(Shell)
         editor = app.query_one(CommandInput)
         line = shell.query_one("#command-line")
+        await pilot.pause()
+        original_line_region = line.region
+        original_output_region = shell.query_one("#transcript").region
         editor.value = "hold"
         await pilot.press("enter")
         await wait_until(started.is_set)
-        assert shell._busy and not line.display
-        assert not editor.has_focus
+        assert shell._busy
+        assert line.display == (prompt_position == "bottom")
         from anyshell.frontend import RunningCursor
 
-        cursor = shell.query_one(RunningCursor)
+        cursor = (
+            shell.query_one(RunningCursor) if prompt_position == "inline" else editor
+        )
+        if prompt_position == "bottom":
+            assert editor.read_only
+            assert line.region == original_line_region
+            assert shell.query_one("#transcript").region == original_output_region
+        else:
+            assert not editor.has_focus
         await wait_until(lambda: cursor.display and cursor.has_focus)
         await wait_until(lambda: app.cursor_position == cursor.cursor_screen_offset)
         await wait_until(lambda: not cursor._draw_cursor)
@@ -376,11 +387,14 @@ async def test_foreground_hides_prompt_until_completion_or_cancellation(
         release.set()
         await wait_until(lambda: not shell._busy and line.display and editor.has_focus)
         assert line.display and editor.has_focus
-        assert not cursor.display
+        assert not shell.query_one(RunningCursor).display
+        assert not editor.read_only
+        if prompt_position == "bottom":
+            assert line.region == original_line_region
         editor.value = "sleep 30"
         await pilot.press("enter")
         await wait_until(lambda: session.running)
-        assert not line.display
+        assert line.display == (prompt_position == "bottom")
         await pilot.press("ctrl+c")
         await wait_until(lambda: not shell._busy and line.display and editor.has_focus)
         assert session.last_status == 130
@@ -551,7 +565,9 @@ async def test_terminal_clicks_keep_active_cursor_focus(prompt_position):
         editor.value = "sleep 30"
         await pilot.press("enter")
         await wait_until(lambda: shell.session.running)
-        cursor = shell.query_one(RunningCursor)
+        cursor = (
+            shell.query_one(RunningCursor) if prompt_position == "inline" else editor
+        )
         await pilot.click("#shell-terminal", offset=(30, 8))
         await wait_until(lambda: cursor.has_focus)
         await wait_until(lambda: not cursor._draw_cursor)
@@ -591,3 +607,46 @@ async def test_manual_scrollback_cancels_pending_prompt_scroll():
         await pilot.press("x")
         await wait_until(lambda: viewport.is_vertical_scroll_end)
         assert editor.value == "x"
+
+
+async def test_bottom_prompt_can_quit_during_foreground_command():
+    app = ShellApp(prompt_position="bottom")
+    async with app.run_test() as pilot:
+        app.query_one(CommandInput).value = "sleep 30"
+        await pilot.press("enter")
+        await wait_until(lambda: app.session.running)
+        await pilot.press("ctrl+q")
+        await wait_until(lambda: not app.is_running)
+
+
+@pytest.mark.parametrize("theme", ["anytext-dark", "anytext-light"])
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_foreground_cursor_keeps_normal_color(theme, prompt_position):
+    from anyshell import Command
+    from anyshell.frontend import RunningCursor
+
+    started = anyio.Event()
+    release = anyio.Event()
+
+    async def hold():
+        started.set()
+        await release.wait()
+
+    session = Session()
+    session.register(Command("hold", "Hold for cursor color check", hold))
+    app = ShellApp(session, prompt_position=prompt_position)
+    app.theme = theme
+    async with app.run_test() as pilot:
+        editor = app.query_one(CommandInput)
+        await pilot.pause()
+        normal = editor.get_component_rich_style("text-area--cursor")
+        editor.value = "hold"
+        await pilot.press("enter")
+        await wait_until(started.is_set)
+        await pilot.pause()
+        cursor = app.query_one(RunningCursor) if prompt_position == "inline" else editor
+        active = cursor.get_component_rich_style("text-area--cursor")
+        assert active.color == normal.color
+        assert active.bgcolor == normal.bgcolor
+        release.set()
+        await wait_until(lambda: not app.query_one(Shell)._busy)

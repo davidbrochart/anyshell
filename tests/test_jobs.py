@@ -59,6 +59,19 @@ async def test_jobs_return_prompt_and_can_be_cancelled():
         assert (await execute(session, "wait 99"))[0].status == 1
 
 
+async def test_background_jobs_lists_existing_running_jobs():
+    session = Session()
+    async with session.background():
+        await execute(session, "sleep 30 &")
+        _, events = await execute(session, "jobs &")
+        with anyio.fail_after(3):
+            await session.wait_jobs(2)
+        assert [e.value for e in events if e.kind == "output"] == [
+            "[1] running  sleep 30"
+        ]
+        assert session.jobs[1].result is None
+
+
 async def test_background_pipeline_uses_launch_directory_and_shared_filesystem():
     session = Session(MemoryFileSystem({"docs/message": "hello\n"}))
     gate = anyio.Event()
@@ -160,7 +173,7 @@ def test_headless_background_jobs_finish():
     assert "[1] running" in result.stderr and "[1] done (0)" in result.stderr
 
 
-async def test_jobs_reports_completed_once_and_keeps_running_ids_unique():
+async def test_jobs_lists_only_running_and_keeps_ids_unique():
     session = Session()
     async with session.background():
         await execute(session, "sleep 0 & sleep 30 &")
@@ -168,7 +181,6 @@ async def test_jobs_reports_completed_once_and_keeps_running_ids_unique():
             await session.wait_jobs(1)
         _, events = await execute(session, "jobs")
         assert [e.value for e in events if e.kind == "output"] == [
-            "[1] done (0)  sleep 0",
             "[2] running  sleep 30",
         ]
         assert set(session.jobs) == {2}
@@ -182,13 +194,38 @@ async def test_jobs_reports_completed_once_and_keeps_running_ids_unique():
         with anyio.fail_after(3):
             await session.wait_jobs()
         _, events = await execute(session, "jobs")
-        assert [e.value for e in events if e.kind == "output"] == [
-            "[2] done (130)  sleep 30",
-            "[3] done (0)  sleep 0",
-        ]
+        assert [e.value for e in events if e.kind == "output"] == []
         assert not session.jobs
         assert not [
             e for e in (await execute(session, "jobs"))[1] if e.kind == "output"
         ]
         await execute(session, "sleep 0 &")
         assert set(session.jobs) == {4}
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_completed_jobs_are_not_repeated_by_jobs_command(prompt_position):
+    from anyshell.frontend import Transcript
+
+    session = Session()
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        editor = app.query_one(CommandInput)
+        shell = app.query_one(Shell)
+        editor.value = "sleep 0 &"
+        await pilot.press("enter")
+        with anyio.fail_after(5):
+            while not session.jobs or not session.jobs[1].done.is_set() or shell._busy:
+                await anyio.sleep(0.01)
+        await pilot.pause()
+        transcript = shell.query_one(Transcript)
+        lines = [line.text.rstrip() for line in transcript.lines]
+        assert "[1] running  sleep 0" in lines
+        assert lines.count("[1] done (0)  sleep 0") == 1
+        editor.value = "jobs"
+        await pilot.press("enter")
+        with anyio.fail_after(5):
+            while shell._busy or session.jobs:
+                await anyio.sleep(0.01)
+        lines = [line.text.rstrip() for line in transcript.lines]
+        assert lines.count("[1] done (0)  sleep 0") == 1

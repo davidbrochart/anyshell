@@ -32,9 +32,10 @@ foreground command is running; Ctrl+Shift+C copies it while a command is running
 Mouse selection and copying also work in the pager. Browser copying uses the
 browser clipboard when permission is available.
 
-The prompt is replaced by a blank cursor line while a foreground command runs
-and returns when it finishes
-or is cancelled with Ctrl+C. Background commands return the prompt immediately.
+The inline prompt is replaced by a blank cursor line while a foreground command
+runs and returns when it finishes or is cancelled with Ctrl+C. The bottom prompt
+stays visible but read-only during foreground execution. Background commands
+return control to the prompt immediately.
 Tab first extends the shared prefix when several completions match. If no more
 characters can be filled in, Tab opens a menu beside the cursor. Use Up/Down or
 Tab to select, Enter to insert, and Escape to dismiss; typing also dismisses it.
@@ -130,11 +131,12 @@ wait 1
 kill 1
 ```
 
-`jobs` lists job IDs and states. `wait ID` waits for a job; `wait` waits for all
+`jobs` lists only running background jobs and their IDs. `wait ID` waits for a job; `wait` waits for all
 jobs still in the job list. `kill ID` cancels a job cooperatively. Ctrl+C cancels the
 foreground command (including `wait`), leaving background jobs running. Job
 output appears in the transcript, with launch and completion notifications.
-Completed jobs are shown once by `jobs`, then removed from the job list.
+Completed jobs are removed from the job list when `jobs` is entered, without
+listing them again.
 Job IDs are not reused during the session.
 
 An unquoted `&` also separates commands: `sleep 30 & echo ready`. Quote or escape

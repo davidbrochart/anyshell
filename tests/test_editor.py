@@ -2,10 +2,11 @@
 
 import anyio
 import pytest
+from anytext.geometry import Region
 from anytext.widgets import TextArea
 
 from anyshell import LocalFileSystem, MemoryFileSystem, Session
-from anyshell.editor import FileEditor
+from anyshell.editor import FileEditor, FileTextArea
 from anyshell.frontend import CommandInput, Shell, ShellApp
 
 
@@ -29,6 +30,19 @@ async def start_editor(app, pilot, command):
     await wait_until(lambda: bool(app.query(FileEditor)))
     await pilot.pause()
     return app.query_one(FileEditor)
+
+
+async def test_editor_pending_repaint_after_removal():
+    app = ShellApp(Session())
+    async with app.run_test() as pilot:
+        screen = await start_editor(app, pilot, "edit new.txt")
+        area = screen.query_one(FileTextArea)
+        await pilot.press("ctrl+q")
+        await wait_until(lambda: not app.query_one(Shell)._busy)
+        assert not area._component_styles
+        lines = area.render_lines(Region(0, 0, 20, 3))
+        assert len(lines) == 3
+        assert all(line.text == " " * 20 for line in lines)
 
 
 async def test_edit_save_existing_and_new_file(filesystem):

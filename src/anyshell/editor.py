@@ -6,6 +6,7 @@ from anytext.app import ComposeResult
 from anytext.binding import Binding
 from anytext.containers import Vertical
 from anytext.reactive import var
+from anytext.strip import Strip
 from anytext.widgets import Static, TextArea
 from rich.text import Text
 
@@ -14,6 +15,12 @@ from .filesystem import FileSystem
 
 class FileTextArea(TextArea):
     """Consume editor shortcuts in order with edits, before app-wide bindings."""
+
+    def render_lines(self, crop):
+        # A pending repaint can outlive removal and its cleared component styles.
+        if self._pruning:
+            return [Strip.blank(crop.width) for _ in range(crop.height)]
+        return super().render_lines(crop)
 
     async def on_key(self, event: events.Key) -> None:
         editor = self.query_ancestor(FileEditor)
