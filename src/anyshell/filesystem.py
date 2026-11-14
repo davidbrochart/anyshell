@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import posixpath
 import shutil
 import time
@@ -357,3 +358,64 @@ class MemoryFileSystem:
 
     def copy(self, source: str, destination: str, *, recursive: bool = False) -> None:
         self._transfer(source, destination, move=False, recursive=recursive)
+
+
+def format_filesystem_error(
+    error: Exception, filesystem: FileSystem, *, include_path: bool = True
+) -> str:
+    """Format OS errors using portable reasons and workspace paths."""
+    if not isinstance(error, OSError):
+        return str(error)
+    reasons = {
+        errno.ENOENT: "no such file or directory",
+        errno.EEXIST: "already exists",
+        errno.ENOTDIR: "not a directory",
+        errno.EISDIR: "is a directory",
+        errno.EACCES: "permission denied",
+        errno.EPERM: "operation not permitted",
+        errno.ENOTEMPTY: "directory is not empty",
+        errno.EROFS: "read-only filesystem",
+    }
+    reason = reasons.get(error.errno)
+    if reason is None:
+        for kind, text in (
+            (FileNotFoundError, "no such file or directory"),
+            (FileExistsError, "already exists"),
+            (NotADirectoryError, "not a directory"),
+            (IsADirectoryError, "is a directory"),
+            (PermissionError, "permission denied"),
+        ):
+            if isinstance(error, kind):
+                reason = text
+                break
+    if reason is None:
+        return str(error)
+    path = error.filename
+    if path is None:
+        if (
+            len(error.args) == 1
+            and isinstance(error.args[0], str)
+            and error.args[0].startswith("/")
+        ):
+            path = error.args[0]
+        else:
+            # Preserve explicit explanations such as workspace-boundary errors.
+            return str(error) if error.errno is None else reason
+    elif isinstance(filesystem, LocalFileSystem):
+        try:
+            path = resolve_path("/", Path(path).relative_to(filesystem.root).as_posix())
+        except (TypeError, ValueError):
+            return reason
+    if not include_path:
+        return reason
+    if error.filename2 is not None:
+        target = error.filename2
+        if isinstance(filesystem, LocalFileSystem):
+            try:
+                target = resolve_path(
+                    "/", Path(target).relative_to(filesystem.root).as_posix()
+                )
+            except (TypeError, ValueError):
+                return reason
+        return f"{path!r} -> {target!r}: {reason}"
+    return f"{path!r}: {reason}"

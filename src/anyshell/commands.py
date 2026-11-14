@@ -14,6 +14,7 @@ import anyio
 from cyclopts import Parameter
 
 from .engine import Command, Context, EditRequest, Event, PageRequest, ShellError
+from .filesystem import format_filesystem_error
 
 BUILTINS: list[Command] = []
 
@@ -143,7 +144,9 @@ async def find(
                 errors.append(f"{display!r}: no such file or directory")
                 continue
             except OSError as error:
-                errors.append(f"{display!r}: {error}")
+                errors.append(
+                    f"{display!r}: {format_filesystem_error(error, ctx.fs, include_path=False)}"
+                )
                 continue
             basename = posixpath.basename(display.rstrip("/")) or "/"
             if (
@@ -158,7 +161,9 @@ async def find(
                 try:
                     entries = ctx.fs.listdir(path)
                 except OSError as error:
-                    errors.append(f"{display!r}: {error}")
+                    errors.append(
+                        f"{display!r}: {format_filesystem_error(error, ctx.fs, include_path=False)}"
+                    )
                     continue
                 for entry in reversed(entries):
                     stack.append(
@@ -321,7 +326,9 @@ async def rm(
             if not force:
                 errors.append(f"{name!r}: no such file")
         except OSError as error:
-            errors.append(f"{name!r}: {error}")
+            errors.append(
+                f"{name!r}: {format_filesystem_error(error, ctx.fs, include_path=False)}"
+            )
         await anyio.lowlevel.checkpoint()
     if errors:
         raise ShellError("; ".join(errors))
@@ -373,10 +380,18 @@ async def less(*files: str, ctx: Context, stdin):
 async def _page(files: tuple[str, ...], ctx: Context, stdin, *, searchable: bool):
     from .presentation import format_value
 
+    def file_lines(name):
+        try:
+            yield from ctx.fs.read_lines(ctx.resolve(name))
+        except FileNotFoundError:
+            raise ShellError(f"{name!r}: no such file or directory") from None
+        except IsADirectoryError:
+            raise ShellError(f"{name!r}: is a directory") from None
+
     with ExitStack() as stack:
         sources = []
         for name in files:
-            source = iter(ctx.fs.read_lines(ctx.resolve(name)))
+            source = file_lines(name)
             if (close := getattr(source, "close", None)) is not None:
                 stack.callback(close)
             # Opening and reading once catches missing paths, permissions and

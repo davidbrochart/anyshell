@@ -428,3 +428,64 @@ async def test_sleep_is_silent():
     result, values, _ = await execute(Session(), "sleep 0.01")
     assert result.status == 0
     assert values == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "ls absent",
+        "ls -l absent",
+        "cat absent",
+        "rmdir absent",
+        "cp absent target",
+        "mv absent target",
+    ],
+)
+async def test_missing_path_errors_are_portable(filesystem, source):
+    result, _, events = await execute(Session(filesystem), source)
+    assert result.status == 1
+    assert [e.value for e in events if e.kind == "error"] == [
+        f"{source.split()[0]}: '/absent': no such file or directory"
+    ]
+
+
+@pytest.mark.parametrize("directory", ["docs", "/"])
+async def test_file_errors_preserve_custom_context_and_use_workspace_paths(
+    filesystem, directory
+):
+    session = Session(filesystem)
+    result, _, events = await execute(session, f"cat {directory}")
+    assert result.status == 1
+    assert [e.value for e in events if e.kind == "error"] == [
+        f"cat: {('/docs' if directory == 'docs' else '/')!r}: is a directory"
+    ]
+    result, _, events = await execute(session, "rm /")
+    assert result.status == 1
+    assert any(
+        "cannot remove the workspace root" in e.value
+        for e in events
+        if e.kind == "error"
+    )
+
+
+async def test_two_path_os_errors_keep_workspace_paths(filesystem):
+    import errno
+
+    from anyshell.filesystem import format_filesystem_error
+
+    source = (
+        str(filesystem.root / "notes.txt")
+        if isinstance(filesystem, LocalFileSystem)
+        else "/notes.txt"
+    )
+    target = (
+        str(filesystem.root / "missing" / "new.txt")
+        if isinstance(filesystem, LocalFileSystem)
+        else "/missing/new.txt"
+    )
+    error = FileNotFoundError(errno.ENOENT, "No such file or directory", source)
+    error.filename2 = target
+    assert (
+        format_filesystem_error(error, filesystem)
+        == "'/notes.txt' -> '/missing/new.txt': no such file or directory"
+    )

@@ -207,7 +207,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     const pageEventsBeforeFailure = await python("sum(event.kind == 'page' for event in browser_app.query_one('Shell').output)");
     for (const pagerCommand of ['more', 'less']) {
       await command(`${pagerCommand} missing-pager.txt`);
-      assert.equal(await python(`session.last_status == 1 and '${pagerCommand}: /missing-pager.txt' in [line.text.rstrip() for line in browser_app.query_one('Transcript').lines]`), true);
+      assert.equal(await python(`session.last_status == 1 and "${pagerCommand}: 'missing-pager.txt': no such file or directory" in [line.text.rstrip() for line in browser_app.query_one('Transcript').lines]`), true);
       assert.equal(await python("sum(event.kind == 'page' for event in browser_app.query_one('Shell').output)"), pageEventsBeforeFailure);
     }
     await page.keyboard.type('cat notes/fruits.txt | more');
