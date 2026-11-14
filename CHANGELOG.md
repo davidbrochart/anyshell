@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- List only running background tasks in `jobs`, keeping automatic launch and
+  completion notifications.
+
+- Keep the foreground cursor's normal themed color instead of the read-only
+  warning color, in both prompt layouts and light and dark themes.
+
+- Keep the bottom prompt row visible and read-only during foreground commands,
+  preventing flicker and transcript resizing while preserving cursor blinking.
+
 - Reject directories explicitly during local text I/O so Windows reports
   `is a directory` consistently, while preserving genuine permission errors.
 

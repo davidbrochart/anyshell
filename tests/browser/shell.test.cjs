@@ -63,13 +63,14 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value == 'sleep 30'"));
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython('session.running'));
-    assert.equal(await python("browser_app.query_one('#command-line').display"), false);
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
-      "browser_app.query_one('RunningCursor').has_focus and browser_app.cursor_position == browser_app.query_one('RunningCursor').cursor_screen_offset"));
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
-      "not browser_app.query_one('RunningCursor')._draw_cursor"));
-    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
-      "browser_app.query_one('RunningCursor')._draw_cursor"));
+    assert.equal(await python("browser_app.query_one('#command-line').display"), promptPosition === 'bottom');
+    const foregroundCursor = promptPosition === 'bottom' ? 'CommandInput' : 'RunningCursor';
+    await page.waitForFunction(name => window.anyshellDemo.pyodide.runPython(
+      `browser_app.query_one('${name}').has_focus and browser_app.cursor_position == browser_app.query_one('${name}').cursor_screen_offset`), foregroundCursor);
+    await page.waitForFunction(name => window.anyshellDemo.pyodide.runPython(
+      `not browser_app.query_one('${name}')._draw_cursor`), foregroundCursor);
+    await page.waitForFunction(name => window.anyshellDemo.pyodide.runPython(
+      `browser_app.query_one('${name}')._draw_cursor`), foregroundCursor);
 
     await page.keyboard.press('Control+c');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython('not session.running and session.last_status == 130'));

@@ -342,6 +342,7 @@ class Session:
         child = Session(self.filesystem)
         child.cwd = self.cwd
         child.commands = self.commands.copy()
+        child.jobs = self.jobs.copy()
 
         async def output(event):
             if event.kind in {"edit", "page", "clear"}:
