@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import posixpath
 import shutil
 import time
@@ -74,6 +75,13 @@ class LocalFileSystem:
             raise PermissionError("path leaves the workspace")
         return candidate
 
+    def _file_path(self, path: str) -> Path:
+        candidate = self._path(path)
+        # Windows reports opening a directory as PermissionError, unlike Unix.
+        if candidate.is_dir():
+            raise IsADirectoryError(path)
+        return candidate
+
     def is_dir(self, path: str) -> bool:
         return self._path(path).is_dir()
 
@@ -105,16 +113,16 @@ class LocalFileSystem:
         }
 
     def read_text(self, path: str) -> str:
-        with self._path(path).open(encoding="utf-8", newline="") as stream:
+        with self._file_path(path).open(encoding="utf-8", newline="") as stream:
             return stream.read()
 
     def read_lines(self, path: str) -> Iterator[str]:
-        with self._path(path).open(encoding="utf-8") as stream:
+        with self._file_path(path).open(encoding="utf-8") as stream:
             for line in stream:
                 yield line.rstrip("\r\n")
 
     def write_text(self, path: str, text: str) -> None:
-        self._path(path).write_text(text, encoding="utf-8", newline="")
+        self._file_path(path).write_text(text, encoding="utf-8", newline="")
 
     def mkdir(self, path: str) -> None:
         self._path(path).mkdir()
@@ -357,3 +365,64 @@ class MemoryFileSystem:
 
     def copy(self, source: str, destination: str, *, recursive: bool = False) -> None:
         self._transfer(source, destination, move=False, recursive=recursive)
+
+
+def format_filesystem_error(
+    error: Exception, filesystem: FileSystem, *, include_path: bool = True
+) -> str:
+    """Format OS errors using portable reasons and workspace paths."""
+    if not isinstance(error, OSError):
+        return str(error)
+    reasons = {
+        errno.ENOENT: "no such file or directory",
+        errno.EEXIST: "already exists",
+        errno.ENOTDIR: "not a directory",
+        errno.EISDIR: "is a directory",
+        errno.EACCES: "permission denied",
+        errno.EPERM: "operation not permitted",
+        errno.ENOTEMPTY: "directory is not empty",
+        errno.EROFS: "read-only filesystem",
+    }
+    reason = reasons.get(error.errno)
+    if reason is None:
+        for kind, text in (
+            (FileNotFoundError, "no such file or directory"),
+            (FileExistsError, "already exists"),
+            (NotADirectoryError, "not a directory"),
+            (IsADirectoryError, "is a directory"),
+            (PermissionError, "permission denied"),
+        ):
+            if isinstance(error, kind):
+                reason = text
+                break
+    if reason is None:
+        return str(error)
+    path = error.filename
+    if path is None:
+        if (
+            len(error.args) == 1
+            and isinstance(error.args[0], str)
+            and error.args[0].startswith("/")
+        ):
+            path = error.args[0]
+        else:
+            # Preserve explicit explanations such as workspace-boundary errors.
+            return str(error) if error.errno is None else reason
+    elif isinstance(filesystem, LocalFileSystem):
+        try:
+            path = resolve_path("/", Path(path).relative_to(filesystem.root).as_posix())
+        except (TypeError, ValueError):
+            return reason
+    if not include_path:
+        return reason
+    if error.filename2 is not None:
+        target = error.filename2
+        if isinstance(filesystem, LocalFileSystem):
+            try:
+                target = resolve_path(
+                    "/", Path(target).relative_to(filesystem.root).as_posix()
+                )
+            except (TypeError, ValueError):
+                return reason
+        return f"{path!r} -> {target!r}: {reason}"
+    return f"{path!r}: {reason}"

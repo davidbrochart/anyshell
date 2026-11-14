@@ -428,3 +428,111 @@ async def test_sleep_is_silent():
     result, values, _ = await execute(Session(), "sleep 0.01")
     assert result.status == 0
     assert values == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "ls absent",
+        "ls -l absent",
+        "cat absent",
+        "rmdir absent",
+        "cp absent target",
+        "mv absent target",
+    ],
+)
+async def test_missing_path_errors_are_portable(filesystem, source):
+    result, _, events = await execute(Session(filesystem), source)
+    assert result.status == 1
+    assert [e.value for e in events if e.kind == "error"] == [
+        f"{source.split()[0]}: '/absent': no such file or directory"
+    ]
+
+
+@pytest.mark.parametrize("directory", ["docs", "/"])
+async def test_file_errors_preserve_custom_context_and_use_workspace_paths(
+    filesystem, directory
+):
+    session = Session(filesystem)
+    result, _, events = await execute(session, f"cat {directory}")
+    assert result.status == 1
+    assert [e.value for e in events if e.kind == "error"] == [
+        f"cat: {('/docs' if directory == 'docs' else '/')!r}: is a directory"
+    ]
+    result, _, events = await execute(session, "rm /")
+    assert result.status == 1
+    assert any(
+        "cannot remove the workspace root" in e.value
+        for e in events
+        if e.kind == "error"
+    )
+
+
+async def test_two_path_os_errors_keep_workspace_paths(filesystem):
+    import errno
+
+    from anyshell.filesystem import format_filesystem_error
+
+    source = (
+        str(filesystem.root / "notes.txt")
+        if isinstance(filesystem, LocalFileSystem)
+        else "/notes.txt"
+    )
+    target = (
+        str(filesystem.root / "missing" / "new.txt")
+        if isinstance(filesystem, LocalFileSystem)
+        else "/missing/new.txt"
+    )
+    error = FileNotFoundError(errno.ENOENT, "No such file or directory", source)
+    error.filename2 = target
+    assert (
+        format_filesystem_error(error, filesystem)
+        == "'/notes.txt' -> '/missing/new.txt': no such file or directory"
+    )
+
+
+@pytest.mark.parametrize("operation", ["read_text", "read_lines", "write_text"])
+@pytest.mark.parametrize("path", ["/", "/docs"])
+def test_directory_text_io_is_portable_on_windows(
+    tmp_path, monkeypatch, operation, path
+):
+    import errno
+
+    (tmp_path / "docs").mkdir()
+    fs = LocalFileSystem(tmp_path)
+    original_open = Path.open
+
+    def windows_open(candidate, *args, **kwargs):
+        if candidate.is_dir():
+            raise PermissionError(errno.EACCES, "Permission denied", str(candidate))
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", windows_open)
+    with pytest.raises(IsADirectoryError):
+        if operation == "write_text":
+            fs.write_text(path, "contents")
+        elif operation == "read_lines":
+            list(fs.read_lines(path))
+        else:
+            fs.read_text(path)
+
+
+@pytest.mark.parametrize("operation", ["read_text", "read_lines", "write_text"])
+def test_genuine_file_permission_errors_are_preserved(tmp_path, monkeypatch, operation):
+    import errno
+
+    (tmp_path / "file.txt").write_text("contents")
+    fs = LocalFileSystem(tmp_path)
+
+    def denied_open(candidate, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied", str(candidate))
+
+    monkeypatch.setattr(Path, "open", denied_open)
+    with pytest.raises(PermissionError) as caught:
+        if operation == "write_text":
+            fs.write_text("/file.txt", "contents")
+        elif operation == "read_lines":
+            list(fs.read_lines("/file.txt"))
+        else:
+            fs.read_text("/file.txt")
+    assert caught.value.errno == errno.EACCES

@@ -16,7 +16,12 @@ from cyclopts import App as ArgumentParser
 from cyclopts import CycloptsError, Parameter
 from rich.console import Console
 
-from .filesystem import FileSystem, MemoryFileSystem, resolve_path
+from .filesystem import (
+    FileSystem,
+    MemoryFileSystem,
+    format_filesystem_error,
+    resolve_path,
+)
 
 
 class ShellError(Exception):
@@ -446,7 +451,9 @@ class Session:
                         )
             except (ShellError, OSError, ValueError) as error:
                 status = 1
-                await emit(Event("error", str(error)))
+                await emit(
+                    Event("error", format_filesystem_error(error, self.filesystem))
+                )
             finally:
                 self._scope = None
         cancelled = scope.cancel_called
@@ -477,7 +484,8 @@ class Session:
                     pass
                 except Exception as error:
                     statuses[index] = 1
-                    await emit(Event("error", f"{commands[index].name}: {error}"))
+                    message = format_filesystem_error(error, self.filesystem)
+                    await emit(Event("error", f"{commands[index].name}: {message}"))
 
         try:
             async with anyio.create_task_group() as group:

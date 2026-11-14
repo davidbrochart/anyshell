@@ -412,3 +412,27 @@ async def test_pager_restores_keyboard_focus_before_reporting_ready(prompt_posit
         assert app.focused is pager
         await pilot.press("space")
         assert pager.query_one(PagerLog).scroll_y > 0
+
+
+@pytest.mark.parametrize("command", ["more", "less"])
+@pytest.mark.parametrize(
+    "path, message",
+    [
+        ("missing", "'missing': no such file or directory"),
+        ("/", "'/': is a directory"),
+    ],
+)
+async def test_pager_file_errors_use_portable_messages(
+    filesystem, command, path, message
+):
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await Session(filesystem).execute(f"{command} {path}", emit)
+    assert result.status == 1
+    assert [event.value for event in events if event.kind == "error"] == [
+        f"{command}: {message}"
+    ]
+    assert not any(event.kind == "page" for event in events)

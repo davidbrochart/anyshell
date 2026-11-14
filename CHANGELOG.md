@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Reject directories explicitly during local text I/O so Windows reports
+  `is a directory` consistently, while preserving genuine permission errors.
+
+- Format common filesystem errors centrally for all commands, using workspace
+  paths and consistent messages instead of host paths and OS errno text.
+
+- Use consistent missing-file and directory errors in `more` and `less` across
+  desktop and browser filesystems, without exposing host filesystem paths.
+
 ## 0.2.0 — 2026-11-14
 
 - Cancel pending prompt auto-scroll when scrolling up, and preserve manual
