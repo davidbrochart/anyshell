@@ -92,17 +92,35 @@ async def test_inline_prompt_geometry_scrolling_and_clear():
         assert command_input.region.y >= transcript.region.bottom
         command_input.value = "cat many.txt"
         await pilot.press("enter")
-        await wait_until(lambda: not shell._busy)
-        await pilot.pause()
+        # Command completion precedes the transcript layout and final scroll.
+        await wait_until(
+            lambda: (
+                not shell._busy
+                and transcript.size.height == len(transcript.lines)
+                and viewport.max_scroll_y > 0
+                and viewport.is_vertical_scroll_end
+                and viewport.content_region.contains_region(command_input.region)
+            )
+        )
         assert viewport.max_scroll_y > 0
         assert command_input.region.y >= viewport.content_region.y
         assert command_input.region.bottom <= viewport.content_region.bottom
         viewport.scroll_home(animate=False, immediate=True)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                viewport.scroll_y == 0
+                and command_input.region.y > viewport.content_region.bottom
+            )
+        )
         assert command_input.region.y > viewport.content_region.bottom
         assert command_input.has_focus
         await pilot.press("x")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                viewport.is_vertical_scroll_end
+                and viewport.content_region.contains_region(command_input.region)
+            )
+        )
         assert command_input.value == "x"
         assert command_input.region.bottom <= viewport.content_region.bottom
         command_input.value = "cd /"
@@ -110,7 +128,15 @@ async def test_inline_prompt_geometry_scrolling_and_clear():
         await wait_until(lambda: not shell._busy)
         assert app.query_one("#prompt", Static).render().plain == "/ ❯"
         await pilot.resize_terminal(50, 14)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                app.screen.size.width == 50
+                and app.screen.size.height == 14
+                and viewport.region.width <= 50
+                and viewport.is_vertical_scroll_end
+                and viewport.content_region.contains_region(command_input.region)
+            )
+        )
         assert command_input.region.bottom <= viewport.content_region.bottom
         command_input.value = "clear"
         await pilot.press("enter")
