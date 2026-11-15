@@ -517,9 +517,10 @@ class Shell(Vertical, can_focus=True):
         if not self.is_attached or self._pruning:
             return
         self.call_after_refresh(self.query_one(CommandInput).resize_editor)
-        self.dismiss_completion()
         if self.history_search_open:
             self.call_after_refresh(self._find_history_match)
+        else:
+            self.dismiss_completion()
         self._request_prompt_scroll()
 
     def on_mount(self) -> None:
@@ -715,6 +716,8 @@ class Shell(Vertical, can_focus=True):
             self.move_history_search(1)
 
     def _find_history_match(self) -> None:
+        if not self.history_search_open or not self.is_attached or self._pruning:
+            return
         seen = set()
         self._search_matches = []
         history = self.session.history

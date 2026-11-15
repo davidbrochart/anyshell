@@ -122,10 +122,17 @@ async def test_history_popup_resize_and_mouse_selection(prompt_position):
         shell = app.query_one(Shell)
         editor = app.query_one(CommandInput)
         await pilot.press("ctrl+r")
+        popup = shell.query_one(CompletionPopup)
+        # Resizing must not hide an open search between layout frames.
+        shell.on_resize()
+        assert popup.display and shell.history_search_open
         await pilot.resize_terminal(60, 18)
         await pilot.pause()
-        popup = shell.query_one(CompletionPopup)
         assert popup.display and shell.history_search_open
+        # Positioning is deferred until the resized editor has its new layout.
+        with anyio.fail_after(5):
+            while popup.region not in app.screen.region:
+                await pilot.pause()
         assert popup.region in app.screen.region
         await pilot.click(shell.query_one(CompletionMenu), offset=(2, 1))
         await pilot.pause()
@@ -133,3 +140,22 @@ async def test_history_popup_resize_and_mouse_selection(prompt_position):
         assert editor.has_focus
         assert not shell.history_search_open and not popup.display
         assert session.history == ["echo old", "echo new"]
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_cancel_history_before_pending_resize_refresh(prompt_position):
+    """A queued resize refresh cannot reopen a cancelled search popup."""
+    session = Session()
+    session.history[:] = ["echo old"]
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        shell = app.query_one(Shell)
+        editor = app.query_one(CommandInput)
+        editor.value = "draft"
+        await pilot.press("ctrl+r")
+        shell.on_resize()
+        shell.finish_history_search(accept=False)
+        await pilot.pause()
+        assert not shell.history_search_open
+        assert not shell.query_one(CompletionPopup).display
+        assert editor.value == "draft"
