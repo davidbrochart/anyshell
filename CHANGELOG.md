@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-11-15
+
 - Require the published Anytext 9.2 release for desktop and browser UI features,
   replacing the default editable sibling checkout.
 
