@@ -518,7 +518,7 @@ class Shell(Vertical, can_focus=True):
             return
         self.call_after_refresh(self.query_one(CommandInput).resize_editor)
         if self.history_search_open:
-            self.call_after_refresh(self._find_history_match)
+            self.call_after_refresh(self._reposition_history_popup)
         else:
             self.dismiss_completion()
         self._request_prompt_scroll()
@@ -731,6 +731,16 @@ class Shell(Vertical, can_focus=True):
         self._show_candidates(labels or ["No matching history"])
         self.query_one(CompletionPopup).border_title = "History search"
 
+    def _reposition_history_popup(self) -> None:
+        """Move an existing search without replacing its selectable options."""
+        if not self.history_search_open or not self.is_attached or self._pruning:
+            return
+        labels = [
+            self.session.history[index].replace("\n", "\\n")
+            for index in self._search_matches
+        ]
+        self._position_candidates(labels or ["No matching history"])
+
     def move_history_search(self, delta: int) -> None:
         if not self._search_matches:
             return
@@ -788,13 +798,21 @@ class Shell(Vertical, can_focus=True):
             self._show_candidates(candidates)
 
     def _show_candidates(self, candidates: list[str]) -> None:
-        command_input = self.query_one(CommandInput)
-
         menu = self.query_one(CompletionMenu)
         menu.clear_options()
         menu.add_options(Text(candidate) for candidate in candidates)
         popup = self.query_one(CompletionPopup)
         popup.border_title = ""
+        self._position_candidates(candidates)
+        popup.display = True
+        popup.scroll_to(x=0, animate=False, force=True)
+        menu.highlighted = 0
+
+    def _position_candidates(self, candidates: list[str]) -> None:
+        """Size and position a popup without changing options or selection."""
+        command_input = self.query_one(CommandInput)
+        menu = self.query_one(CompletionMenu)
+        popup = self.query_one(CompletionPopup)
         cursor = command_input.cursor_screen_offset
         content_width = max(cell_len(candidate) for candidate in candidates) + 4
         width = min(self.screen.size.width, max(16, content_width + 2))
@@ -809,9 +827,6 @@ class Shell(Vertical, can_focus=True):
             cursor.x - self.content_region.x,
             y - self.content_region.y,
         )
-        popup.display = True
-        popup.scroll_to(x=0, animate=False, force=True)
-        menu.highlighted = 0
 
     @property
     def completion_open(self) -> bool:
@@ -841,7 +856,12 @@ class Shell(Vertical, can_focus=True):
             if self.history_search_open:
                 if self._search_matches:
                     menu = self.query_one(CompletionMenu)
-                    self._search_index = self._search_matches[menu.highlighted or 0]
+                    if not (
+                        0 <= event.option_index < len(self._search_matches)
+                        and menu.get_option_at_index(event.option_index) is event.option
+                    ):
+                        return
+                    self._search_index = self._search_matches[event.option_index]
                     self.finish_history_search(accept=True)
             else:
                 self.accept_completion()

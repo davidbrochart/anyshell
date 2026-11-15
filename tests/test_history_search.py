@@ -129,13 +129,27 @@ async def test_history_popup_resize_and_mouse_selection(prompt_position):
         await pilot.resize_terminal(60, 18)
         await pilot.pause()
         assert popup.display and shell.history_search_open
-        # Positioning is deferred until the resized editor has its new layout.
+        # Flush the deferred positioning callback, then its resulting layout.
+        positioned = anyio.Event()
+        shell.on_resize()
+        shell.call_after_refresh(positioned.set)
         with anyio.fail_after(5):
-            while popup.region not in app.screen.region:
+            await positioned.wait()
+            await pilot.pause()
+            menu = shell.query_one(CompletionMenu)
+            while (
+                popup.region not in app.screen.region
+                or app.screen.get_style_at(
+                    menu.region.x + 2, menu.region.y + 1
+                ).meta.get("option")
+                != 1
+            ):
                 await pilot.pause()
         assert popup.region in app.screen.region
-        await pilot.click(shell.query_one(CompletionMenu), offset=(2, 1))
-        await pilot.pause()
+        assert await pilot.click(menu, offset=(2, 1))
+        with anyio.fail_after(5):
+            while shell.history_search_open:
+                await pilot.pause()
         assert editor.value == "echo old"
         assert editor.has_focus
         assert not shell.history_search_open and not popup.display
@@ -159,3 +173,58 @@ async def test_cancel_history_before_pending_resize_refresh(prompt_position):
         assert not shell.history_search_open
         assert not shell.query_one(CompletionPopup).display
         assert editor.value == "draft"
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_resize_preserves_history_options_and_selection(prompt_position):
+    """A resize cannot rebuild options or reset a selected history entry."""
+    session = Session()
+    session.history[:] = ["echo old", "echo new"]
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        shell = app.query_one(Shell)
+        await pilot.press("ctrl+r", "ctrl+r")
+        menu = shell.query_one(CompletionMenu)
+        options = tuple(menu.options)
+        assert menu.highlighted == 1 and shell._search_index == 0
+        positioned = anyio.Event()
+        shell.on_resize()
+        shell.call_after_refresh(positioned.set)
+        with anyio.fail_after(5):
+            await positioned.wait()
+        assert tuple(menu.options) == options
+        assert menu.highlighted == 1 and shell._search_index == 0
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_history_click_uses_selected_option_event(prompt_position):
+    """A queued click keeps its selected entry even if the highlight moves."""
+    session = Session()
+    session.history[:] = ["echo old", "echo new"]
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        shell = app.query_one(Shell)
+        await pilot.press("ctrl+r")
+        menu = shell.query_one(CompletionMenu)
+        event = menu.OptionSelected(menu, menu.get_option_at_index(1), 1)
+        menu.highlighted = 0
+        shell.completion_selected(event)
+        assert shell.query_one(CommandInput).value == "echo old"
+        assert not shell.history_search_open
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_history_click_from_previous_results_is_ignored(prompt_position):
+    """An old click cannot select an entry from newly filtered results."""
+    session = Session()
+    session.history[:] = ["echo old", "echo new"]
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        shell = app.query_one(Shell)
+        await pilot.press("ctrl+r")
+        menu = shell.query_one(CompletionMenu)
+        event = menu.OptionSelected(menu, menu.get_option_at_index(1), 1)
+        await pilot.press("n")
+        shell.completion_selected(event)
+        assert shell.query_one(CommandInput).value == "n"
+        assert shell.history_search_open
