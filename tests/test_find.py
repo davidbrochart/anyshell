@@ -51,7 +51,7 @@ async def test_find_default_traversal_and_records(filesystem):
         "type": "file",
     }
     assert format_value(rows[2]) == "./docs/.hidden.txt"
-    assert format_value(rows[1]) == "./docs/"
+    assert format_value(rows[1]) == "./docs"
 
 
 async def test_find_filters_depth_and_pipelines(filesystem):
@@ -157,11 +157,34 @@ def test_find_headless_paths(tmp_path):
             "--root",
             str(tmp_path),
             "-c",
-            "find . -type f",
+            "find .",
         ],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0
-    assert result.stdout == "./nested/file.txt\n"
+    assert result.stdout == ".\n./nested\n./nested/file.txt\n"
     assert not result.stderr
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+@pytest.mark.parametrize("source", ["find .", "find . | cat"])
+async def test_find_displays_one_path_per_line(prompt_position, source):
+    from anyshell.frontend import CommandInput, Shell, ShellApp, Transcript
+
+    session = Session(MemoryFileSystem({"docs/a.txt": "a", "b.txt": "b"}))
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        editor = app.query_one(CommandInput)
+        editor.value = source
+        await pilot.press("enter")
+        shell = app.query_one(Shell)
+        with anyio.fail_after(5):
+            while shell._busy:
+                await anyio.sleep(0.01)
+        await pilot.pause()
+        paths = [".", "./b.txt", "./docs", "./docs/a.txt"]
+        rows = [e.value for e in shell.output if e.kind == "output"]
+        assert [row["path"] for row in rows] == paths
+        lines = [line.text.rstrip() for line in shell.query_one(Transcript).lines]
+        assert lines[-len(paths) :] == paths

@@ -47,14 +47,15 @@ class CommandInput(TextArea):
     BINDINGS = [
         Binding("up", "history_previous", show=False),
         Binding("down", "history_next", show=False),
-        Binding("alt+up", "older_command", show=False),
-        Binding("alt+down", "newer_command", show=False),
+        Binding("alt+up,ctrl+up", "older_command", show=False),
+        Binding("alt+down,ctrl+down", "newer_command", show=False),
         Binding("enter", "submit", show=False),
         Binding("shift+enter,ctrl+o", "newline", show=False),
         Binding("ctrl+enter", "force_submit", show=False),
         Binding("tab", "complete", show=False),
         Binding("escape", "dismiss_completion", show=False),
         Binding("ctrl+c", "cancel_command", show=False),
+        Binding("ctrl+r", "search_history", show=False),
     ]
 
     @property
@@ -74,6 +75,25 @@ class CommandInput(TextArea):
             if event.key == "ctrl+c":
                 self.shell.cancel()
             return
+        if self.shell.history_search_open:
+            if event.key in {
+                "enter",
+                "ctrl+enter",
+                "tab",
+                "escape",
+                "ctrl+c",
+                "up",
+                "down",
+            }:
+                event.stop()
+                event.prevent_default()
+                if event.key in {"escape", "ctrl+c"}:
+                    self.shell.finish_history_search(accept=False)
+                elif event.key in {"up", "down"}:
+                    self.shell.move_history_search(-1 if event.key == "up" else 1)
+                else:
+                    self.shell.finish_history_search(accept=True)
+                return
         # Handle editor shortcuts in the same queue as typed characters. App-level
         # priority bindings could submit before earlier edits have been applied.
         for binding in self.BINDINGS:
@@ -154,6 +174,9 @@ class CommandInput(TextArea):
 
     async def action_complete(self) -> None:
         await self.shell.complete()
+
+    def action_search_history(self) -> None:
+        self.shell.search_history()
 
     def action_dismiss_completion(self) -> None:
         self.shell.dismiss_completion()
@@ -296,6 +319,14 @@ class Transcript(SelectableLog, can_focus=False):
 class Shell(Vertical, can_focus=True):
     """Embeddable shell UI. Supply a session to retain state across remounts."""
 
+    class Exited(Message):
+        """The session exited; its host may now remove this shell safely."""
+
+        def __init__(self, shell: Shell, status: int) -> None:
+            super().__init__()
+            self.shell = shell
+            self.status = status
+
     BINDINGS = [
         Binding("ctrl+c", "cancel", show=False),
         Binding("ctrl+shift+c,super+c", "copy_selection", show=False, priority=True),
@@ -351,11 +382,13 @@ class Shell(Vertical, can_focus=True):
         session: Session | None = None,
         *,
         prompt_position: Literal["inline", "bottom"] = "inline",
+        focus_on_mount: bool = True,
         **kwargs,
     ) -> None:
         if prompt_position not in {"inline", "bottom"}:
             raise ValueError("prompt_position must be 'inline' or 'bottom'")
         super().__init__(**kwargs)
+        self._focus_on_mount = focus_on_mount
         self._prompt_position = prompt_position
         self.set_class(prompt_position == "inline", "inline-prompt")
         self.set_class(prompt_position == "bottom", "bottom-prompt")
@@ -369,6 +402,12 @@ class Shell(Vertical, can_focus=True):
         self._file_rows: list[dict] = []
         self._completions: list[str] = []
         self._completion_source: str | None = None
+        self.history_search_open = False
+        self._search_index: int | None = None
+        self._search_query = ""
+        self._search_draft = ""
+        self._search_cursor = 0
+        self._search_matches: list[int] = []
 
     def focus_on_click(self) -> bool:
         # Blank space and non-focusable output must not steal the active cursor.
@@ -406,6 +445,8 @@ class Shell(Vertical, can_focus=True):
         self._prompt_scroll_pending = False
 
     def _request_prompt_scroll(self) -> None:
+        if not self.is_attached or self._pruning:
+            return
         if self.prompt_position == "inline":
             self.query_one(ShellScroll)._follow_prompt = True
         if not self._prompt_scroll_pending:
@@ -413,6 +454,8 @@ class Shell(Vertical, can_focus=True):
             self.call_after_refresh(self._show_prompt, self._prompt_scroll_generation)
 
     def _show_prompt(self, generation: int) -> None:
+        if not self.is_attached or self._pruning:
+            return
         if generation != self._prompt_scroll_generation:
             return
         self._prompt_scroll_pending = False
@@ -443,7 +486,12 @@ class Shell(Vertical, can_focus=True):
                     self.call_after_refresh(self._position_prompt_cursor)
 
     def _position_prompt_cursor(self) -> None:
-        if self.is_mounted and not self._busy:
+        if (
+            self.is_mounted
+            and self.is_attached
+            and not self._pruning
+            and not self._busy
+        ):
             editor = self.query_one(CommandInput)
             if editor.has_focus:
                 self.app.cursor_position = editor.cursor_screen_offset
@@ -454,6 +502,10 @@ class Shell(Vertical, can_focus=True):
         if isinstance(event.text_area, CommandInput):
             event.stop()
             event.text_area.resize_editor()
+            if self.history_search_open and event.text_area.value != self._search_query:
+                self._search_query = event.text_area.value
+                self._search_index = None
+                self._find_history_match()
             if (
                 self.completion_open
                 and event.text_area.value != self._completion_source
@@ -462,14 +514,19 @@ class Shell(Vertical, can_focus=True):
             self._request_prompt_scroll()
 
     def on_resize(self) -> None:
+        if not self.is_attached or self._pruning:
+            return
         self.call_after_refresh(self.query_one(CommandInput).resize_editor)
         self.dismiss_completion()
+        if self.history_search_open:
+            self.call_after_refresh(self._find_history_match)
         self._request_prompt_scroll()
 
     def on_mount(self) -> None:
         self._jobs_ready = anyio.Event()
         self.run_worker(self._background_jobs(), name="shell-jobs")
-        self.query_one(CommandInput).focus(scroll_visible=False)
+        if self._focus_on_mount:
+            self.query_one(CommandInput).focus(scroll_visible=False)
         self._request_prompt_scroll()
 
     async def _background_jobs(self) -> None:
@@ -517,15 +574,20 @@ class Shell(Vertical, can_focus=True):
             width = max(1, self.query_one(RichLog).scrollable_content_region.width)
             await self.session.execute(source, self.receive, output_width=width)
         finally:
+            restore_focus = self.has_focus_within
             self._busy = False
-            self._history_index = len(self.session.history)
-            self._draft = ""
-            self.query_one("#prompt", Static).update(f"{self.session.cwd} ❯")
-            self.query_one(RunningCursor).display = False
-            self.query_one("#command-line").display = True
-            self.query_one(CommandInput).read_only = False
-            self.query_one(CommandInput).focus(scroll_visible=False)
-            self._request_prompt_scroll()
+            if self.session.exit_status is None:
+                self._history_index = len(self.session.history)
+                self._draft = ""
+                self.query_one("#prompt", Static).update(f"{self.session.cwd} ❯")
+                self.query_one(RunningCursor).display = False
+                self.query_one("#command-line").display = True
+                self.query_one(CommandInput).read_only = False
+                if restore_focus:
+                    self.query_one(CommandInput).focus(scroll_visible=False)
+                self._request_prompt_scroll()
+        if self.session.exit_status is not None:
+            self.post_message(self.Exited(self, self.session.exit_status))
 
     def _flush_file_rows(self) -> None:
         if not self._file_rows:
@@ -583,17 +645,23 @@ class Shell(Vertical, can_focus=True):
                 else:
                     await view.closed.wait()
             finally:
+                restore_focus = self.has_focus_within
                 with anyio.CancelScope(shield=True):
                     await view.remove()
                 terminal.disabled = False
                 terminal.display = True
-                self.query_one(CommandInput).focus(scroll_visible=False)
+                if restore_focus:
+                    self.query_one(CommandInput).focus(scroll_visible=False)
                 self._request_prompt_scroll()
         elif event.kind == "clear":
             self._file_rows.clear()
             transcript.clear()
             self.output.clear()
-        elif event.kind == "output" and is_file_record(event.value):
+        elif (
+            event.kind == "output"
+            and is_file_record(event.value)
+            and "path" not in event.value
+        ):
             # Bound presentation buffering while keeping pipeline records untouched.
             if self._file_rows and is_long_file_record(
                 self._file_rows[0]
@@ -631,6 +699,54 @@ class Shell(Vertical, can_focus=True):
             else:
                 self.query_one(CommandInput).value = ""
 
+    def search_history(self) -> None:
+        editor = self.query_one(CommandInput)
+        if not self.history_search_open:
+            self.dismiss_completion()
+            self.history_search_open = True
+            self._search_draft = editor.value
+            self._search_cursor = editor.cursor_position
+            self._search_query = editor.value
+            self._find_history_match()
+        elif editor.value != self._search_query:
+            self._search_query = editor.value
+            self._find_history_match()
+        else:
+            self.move_history_search(1)
+
+    def _find_history_match(self) -> None:
+        seen = set()
+        self._search_matches = []
+        history = self.session.history
+        for index in range(len(history) - 1, -1, -1):
+            command = history[index]
+            if self._search_query in command and command not in seen:
+                seen.add(command)
+                self._search_matches.append(index)
+        self._search_index = self._search_matches[0] if self._search_matches else None
+        labels = [history[index].replace("\n", "\\n") for index in self._search_matches]
+        self._show_candidates(labels or ["No matching history"])
+        self.query_one(CompletionPopup).border_title = "History search"
+
+    def move_history_search(self, delta: int) -> None:
+        if not self._search_matches:
+            return
+        menu = self.query_one(CompletionMenu)
+        menu.highlighted = ((menu.highlighted or 0) + delta) % len(self._search_matches)
+        self._search_index = self._search_matches[menu.highlighted]
+
+    def finish_history_search(self, *, accept: bool) -> None:
+        if accept and self._search_index is None:
+            return
+        editor = self.query_one(CommandInput)
+        match = self._search_index
+        self.history_search_open = False
+        self.dismiss_completion()
+        editor.value = self.session.history[match] if accept else self._search_draft
+        editor.cursor_position = len(editor.value) if accept else self._search_cursor
+        self._history_index = len(self.session.history)
+        self._request_prompt_scroll()
+
     def history_move(self, delta: int) -> None:
         command_input = self.query_one(CommandInput)
         if self._history_index == len(self.session.history):
@@ -666,27 +782,33 @@ class Shell(Vertical, can_focus=True):
                 return
             self._completions = candidates
             self._completion_source = command_input.value
-            menu = self.query_one(CompletionMenu)
-            menu.clear_options()
-            menu.add_options(Text(candidate) for candidate in candidates)
-            popup = self.query_one(CompletionPopup)
-            cursor = command_input.cursor_screen_offset
-            content_width = max(cell_len(candidate) for candidate in candidates) + 4
-            width = min(self.screen.size.width, max(16, content_width + 2))
-            popup.styles.width = width
-            menu.styles.width = max(width - 2, content_width)
-            height = min(10, len(candidates) + 2 + (content_width > width - 2))
-            popup.styles.height = height
-            y = cursor.y + 1
-            if y + height > self.content_region.bottom:
-                y = max(0, cursor.y - height)
-            popup.styles.offset = (
-                cursor.x - self.content_region.x,
-                y - self.content_region.y,
-            )
-            popup.display = True
-            popup.scroll_to(x=0, animate=False, force=True)
-            menu.highlighted = 0
+            self._show_candidates(candidates)
+
+    def _show_candidates(self, candidates: list[str]) -> None:
+        command_input = self.query_one(CommandInput)
+
+        menu = self.query_one(CompletionMenu)
+        menu.clear_options()
+        menu.add_options(Text(candidate) for candidate in candidates)
+        popup = self.query_one(CompletionPopup)
+        popup.border_title = ""
+        cursor = command_input.cursor_screen_offset
+        content_width = max(cell_len(candidate) for candidate in candidates) + 4
+        width = min(self.screen.size.width, max(16, content_width + 2))
+        popup.styles.width = width
+        menu.styles.width = max(width - 2, content_width)
+        height = min(10, len(candidates) + 2 + (content_width > width - 2))
+        popup.styles.height = height
+        y = cursor.y + 1
+        if y + height > self.content_region.bottom:
+            y = max(0, cursor.y - height)
+        popup.styles.offset = (
+            cursor.x - self.content_region.x,
+            y - self.content_region.y,
+        )
+        popup.display = True
+        popup.scroll_to(x=0, animate=False, force=True)
+        menu.highlighted = 0
 
     @property
     def completion_open(self) -> bool:
@@ -713,13 +835,29 @@ class Shell(Vertical, can_focus=True):
     def completion_selected(self, event: OptionList.OptionSelected) -> None:
         if isinstance(event.option_list, CompletionMenu):
             event.stop()
-            self.accept_completion()
+            if self.history_search_open:
+                if self._search_matches:
+                    menu = self.query_one(CompletionMenu)
+                    self._search_index = self._search_matches[menu.highlighted or 0]
+                    self.finish_history_search(accept=True)
+            else:
+                self.accept_completion()
             self.query_one(CommandInput).focus(scroll_visible=False)
 
 
 class ShellApp(App, inherit_bindings=False):
     TITLE = "Anyshell"
-    BINDINGS = [Binding("ctrl+q", "quit", "Quit")]
+    BINDINGS = [
+        Binding("ctrl+q", "quit", "Quit"),
+        Binding("alt+v", "split_pane('horizontal')", "Split right", priority=True),
+        Binding("alt+h", "split_pane('vertical')", "Split below", priority=True),
+        Binding("alt+right", "focus_pane('right')", "Focus pane", priority=True),
+        Binding("alt+left", "focus_pane('left')", show=False, priority=True),
+        Binding("alt+up", "focus_pane('up')", show=False, priority=True),
+        Binding("alt+down", "focus_pane('down')", show=False, priority=True),
+        Binding("alt+w", "close_pane", "Close pane", priority=True),
+        Binding("alt+d", "toggle_dividers", "Dividers", priority=True),
+    ]
 
     def __init__(
         self,
@@ -735,5 +873,40 @@ class ShellApp(App, inherit_bindings=False):
         self.prompt_position = prompt_position
 
     def compose(self) -> ComposeResult:
-        yield Shell(self.session, prompt_position=self.prompt_position)
+        from .panes import ShellWorkspace
+
+        yield ShellWorkspace(self.session, prompt_position=self.prompt_position)
         yield Footer()
+
+    async def action_split_pane(self, orientation: str) -> None:
+        from .panes import ShellWorkspace
+
+        await self.query_one(ShellWorkspace).split_active(orientation)
+
+    def action_focus_pane(self, direction: str) -> None:
+        from .panes import ShellWorkspace
+
+        self.query_one(ShellWorkspace).focus_pane(direction)
+
+    async def action_close_pane(self) -> None:
+        from .panes import ShellWorkspace
+
+        await self.query_one(ShellWorkspace).close_active()
+
+    def action_toggle_dividers(self) -> None:
+        from .panes import ShellWorkspace
+
+        self.query_one(ShellWorkspace).toggle_dividers()
+
+    @on(Shell.Exited)
+    async def shell_exited(self, event: Shell.Exited) -> None:
+        from .panes import ShellWorkspace
+
+        event.stop()
+        workspace = self.query_one(ShellWorkspace)
+        if event.shell not in workspace.panes:
+            return
+        if len(workspace.panes) == 1:
+            self.exit(event.status)
+        else:
+            await workspace.close_pane(event.shell)

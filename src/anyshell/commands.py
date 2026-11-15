@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 import math
 import posixpath
 import re
-from contextlib import ExitStack, aclosing
+from collections import deque
+from contextlib import AsyncExitStack, ExitStack, aclosing
+from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
+from io import IncrementalNewlineDecoder
 from typing import Annotated, Literal
 
 import anyio
 from cyclopts import Parameter
 
 from .engine import Command, Context, EditRequest, Event, PageRequest, ShellError
-from .filesystem import format_filesystem_error
+from .filesystem import FileHandle, format_filesystem_error
 
 BUILTINS: list[Command] = []
 
@@ -188,6 +192,121 @@ async def cat(*files: str, ctx: Context, stdin, stdout):
                 await stdout.send(line)
 
 
+@dataclass
+class _TailFile:
+    """Track a followed file's byte offset and incomplete text line."""
+
+    name: str
+    file: FileHandle
+    revision: int = 0
+    pending: str = ""
+    decoder: IncrementalNewlineDecoder = field(
+        default_factory=lambda: IncrementalNewlineDecoder(
+            codecs.getincrementaldecoder("utf-8")(), translate=True
+        )
+    )
+
+    async def read(self):
+        """Read to a snapshot of EOF, resetting partial data on replacements."""
+        end = self.file.size
+        while self.file.tell() < end or self.revision != self.file.revision:
+            size = min(65536, max(0, end - self.file.tell())) or 65536
+            chunk = await self.file.read_bytes(size)
+            if self.revision != self.file.revision:
+                self.pending = ""
+                self.decoder.reset()
+                self.revision = self.file.revision
+            if not chunk:
+                break
+            text = self.pending + self.decoder.decode(chunk)
+            *lines, self.pending = text.split("\n")
+            for line in lines:
+                yield line
+
+
+async def _tail_changes(reader: _TailFile, send) -> None:
+    """Forward a handle's latched notifications into a multi-file follower."""
+    async with send:
+        while True:
+            await reader.file.wait_changed()
+            await send.send(reader)
+
+
+@builtin(
+    "tail", "Print the last lines of input or files, optionally following changes."
+)
+async def tail(
+    *files: Annotated[str, Parameter(allow_leading_hyphen=True)],
+    lines: Annotated[
+        int, Parameter(name=["--lines", "-n"], help="Number of trailing lines.")
+    ] = 10,
+    follow: Annotated[
+        bool, Parameter(name=["--follow", "-f"], help="Keep watching named files.")
+    ] = False,
+    ctx: Context,
+    stdin,
+    stdout,
+):
+    if lines < 0:
+        raise ShellError("line count must be nonnegative")
+    readers = []
+    multiple = len(files) > 1
+    last_name = None
+    async with AsyncExitStack() as stack:
+        for name in files or ("-",):
+            if multiple:
+                await stdout.send(f"==> {name} <==")
+            last_name = name
+            trailing = deque(maxlen=lines)
+            if name == "-":
+                async for value in stdin:
+                    trailing.append(value)
+            elif not follow:
+                source = ctx.fs.read_lines(ctx.resolve(name))
+                try:
+                    for line in source:
+                        trailing.append(line)
+                        await anyio.lowlevel.checkpoint()
+                finally:
+                    if close := getattr(source, "close", None):
+                        close()
+            else:
+                file = await stack.enter_async_context(ctx.fs.open(ctx.resolve(name)))
+                reader = _TailFile(name, file)
+                if lines:
+                    async for line in reader.read():
+                        trailing.append(line)
+                    if reader.pending and len(trailing) == lines:
+                        trailing.popleft()
+                else:
+                    file.seek(0, 2)
+                readers.append(reader)
+            for value in trailing:
+                await stdout.send(value)
+        if not readers:
+            return
+        send, receive = anyio.create_memory_object_stream(len(readers))
+        error = None
+        async with anyio.create_task_group() as group:
+            for reader in readers:
+                group.start_soon(_tail_changes, reader, send.clone())
+            try:
+                async with send, receive:
+                    async for reader in receive:
+                        async for line in reader.read():
+                            if multiple and reader.name != last_name:
+                                await stdout.send(f"==> {reader.name} <==")
+                                last_name = reader.name
+                            await stdout.send(line)
+            except Exception as exc:
+                # Keep filesystem errors portable instead of wrapping them in
+                # a task-group exception. Watchers only wait and forward events.
+                error = exc
+                group.cancel_scope.cancel()
+        if error is not None:
+            raise error
+
+
 @builtin("grep", "Filter input or file lines using a Python regular expression.")
 async def grep(
     pattern: str,
@@ -294,6 +413,26 @@ async def write(path: str, *text: str, ctx: Context):
     if not text:
         raise ShellError("write requires text after the file name")
     ctx.fs.write_text(ctx.resolve(path), " ".join(text) + "\n")
+
+
+@builtin("ln", "Create a symbolic link with -s.", standalone=True)
+async def ln(
+    target: str,
+    link: str,
+    *,
+    symbolic: Annotated[
+        bool, Parameter(name=["--symbolic", "-s"], help="Create a symbolic link.")
+    ] = False,
+    ctx: Context,
+):
+    if not symbolic:
+        raise ShellError("hard links are not supported; use ln -s")
+    destination = ctx.resolve(link)
+    if ctx.fs.is_dir(destination):
+        destination = posixpath.join(
+            destination, posixpath.basename(target.rstrip("/"))
+        )
+    ctx.fs.symlink(target, destination)
 
 
 @builtin("rm", "Remove files, or directory trees with -r.", standalone=True)
@@ -431,6 +570,13 @@ async def edit(path: str, *, ctx: Context):
 @builtin("clear", "Clear the frontend transcript.", standalone=True)
 async def clear(*, ctx: Context):
     await ctx.emit(Event("clear"))
+
+
+@builtin("exit", "Close this shell session or pane.", standalone=True)
+async def exit(status: int | None = None, *, ctx: Context):
+    ctx.session.exit_status = (
+        ctx.session.last_status if status is None else status
+    ) % 256
 
 
 @builtin("sleep", "Wait asynchronously; Ctrl+C cancels.")

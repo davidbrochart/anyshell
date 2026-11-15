@@ -25,8 +25,41 @@ editor, run `uv run --extra anytext anyshell --prompt-position bottom` or constr
 `Shell(session, prompt_position="bottom")`. Both `Shell` and `ShellApp` accept
 `prompt_position="inline"` or `prompt_position="bottom"`.
 
+`ShellApp` supports resizable, nested shell panes using Anytext's `SplitPane`:
+
+| Shortcut | Action |
+| --- | --- |
+| Alt+V | Split the active pane side by side |
+| Alt+H | Split the active pane into stacked panes |
+| Alt+Up / Alt+Down / Alt+Left / Alt+Right | Focus the pane in that direction |
+| Alt+W | Close the active pane (keep at least one) |
+| Alt+D | Show or hide split dividers |
+
+Drag a divider or the shell border to resize; shared corners adjust both axes.
+You can also focus a divider and use the arrow keys. Alt+right-drag
+inside a pane resizes its containing split. Alt+left-drag a pane onto another
+pane to swap their positions while keeping their sessions and drafts. Hidden dividers
+remain draggable at the pane boundary and take up no layout space. Alt+D affects
+existing splits and newly created splits. Each new pane starts
+in the active pane's directory with its own history and jobs, sharing the same
+filesystem and registered commands. Splitting and resizing preserve existing
+commands, transcripts, and drafts. Closing a pane cancels its running commands
+and jobs. Click another pane to focus it. These pane shortcuts belong to
+`ShellApp`; an embedded `Shell` keeps its existing shortcuts.
+
+Enter `exit` to close the current pane, or quit the app when it is the last pane.
+`exit STATUS` supplies an exit status (otherwise the previous command's status is
+used). Later commands on the same line are skipped. In headless mode, `exit`
+ends the session and cancels its background jobs. Embedded hosts can handle the
+`Shell.Exited` message to remove the issuing shell.
+
 The widget provides a scrollable transcript, Up/Down history, Tab completion for
 command names, options, and unquoted paths, Ctrl+C cancellation, and Ctrl+Q to quit the demo.
+Press Ctrl+R to open a history-search popup, like Tab completion. Type to filter
+the current session's history by substring, use Up/Down to select a result, or
+press Ctrl+R again for older matches. Enter or Tab puts the match
+on the command line without running it; press Enter again to execute it.
+Escape or Ctrl+C cancels the search and restores your draft and cursor position.
 Drag across command output to select text. Ctrl+C copies selected output when no
 foreground command is running; Ctrl+Shift+C copies it while a command is running.
 Mouse selection and copying also work in the pager. Browser copying uses the
@@ -64,7 +97,7 @@ remain part of the argument. All commands are parsed and validated before any
 runs; a runtime failure does not prevent later commands from running, and the
 final status is that of the last command. Ctrl+C cancels the active sequence or
 clears unfinished input. History keeps a multiline submission as one entry.
-Up/Down moves within a multiline editor; Alt+Up/Down navigates command history.
+Up/Down moves within a multiline editor; Ctrl+Up/Down navigates command history.
 The same syntax works through `Session.execute()` and headless `-c` execution.
 
 ## Commands and pipelines
@@ -104,6 +137,46 @@ pipeline. Filesystem mutations, `cd`, and `clear` run outside pipelines.
 Its pipeline records include `size` and `modified` (Unix seconds); directory size
 is `None`. `ls -a` (`--all`) includes hidden entries, and flags combine as `-la`.
 `grep -i` ignores case and `sort -r` reverses the order.
+
+`tail FILE` prints the last 10 lines; `tail -n 20 FILE` changes the count.
+Without filenames (or with `-`), it takes input from a pipe or `< FILE`.
+Multiple files get filename headers. Pipeline input retains its Python values.
+
+```sh
+tail -n 5 notes.txt
+cat notes.txt | tail -n 3
+tail -f app.log
+tail -n 0 -f app.log &
+echo "new entry" >> app.log
+```
+
+`tail -f` waits for change notifications from the shared filesystem instance,
+without polling, OS watchers, or extra threads. It prints trailing lines, then
+emits newly completed lines as text is appended, retaining partial lines until
+a newline arrives. Overwriting or replacing the file restarts reading from the
+beginning. Handles follow paths rather than keeping an OS descriptor across
+renames; removing the watched path reports an error and ends the follower.
+Only changes made through that filesystem instance produce notifications;
+external disk edits and direct changes to `MemoryFileSystem.files` do not.
+Follow mode is ignored for piped input. Ctrl+C stops a foreground follower;
+use `kill ID` for a background follower.
+
+Python callers can use the same read handles:
+
+```python
+async with filesystem.open("/app.log") as file:
+    print(await file.read(), end="")
+    while True:
+        await file.wait_changed()
+        print(await file.read(), end="")
+```
+
+Each handle has its own cursor and subscribes before the first read. Notifications
+remain pending until consumed and may combine several writes. `read()` returns
+available UTF-8 text immediately; `read_bytes(size)` supports bounded byte reads,
+and `tell()` / `seek()` use byte offsets. Leaving the context unsubscribes, even
+when cancelled. `FileHandle` is exported for callers that need its type.
+
 `touch PATH...` creates missing files or updates modification times without
 changing existing contents. Existing directories can also be touched.
 `rm PATH...` removes files, continuing with remaining paths if one fails.
@@ -115,7 +188,7 @@ does not follow symbolic links and cannot remove the workspace root.
 directories; its completion suggests only directories.
 
 This is an initial shell language: quoting, multiline commands, and pipes are supported. Bash scripts,
-redirection, environment expansion, glob expansion, process execution, foregrounding or suspending jobs, and persistent history
+environment expansion, glob expansion, process execution, foregrounding or suspending jobs, and persistent history
 are not implemented. Commands are trusted Python
 code, not a sandbox. Browser filesystem changes are in-memory and reset on reload.
 
@@ -171,6 +244,31 @@ find docs other-directory -type f | select path
 find . -type f | count
 ```
 
+Redirect command output with `> FILE` (create or truncate), append with `>> FILE`,
+and read file lines through stdin with `< FILE`. Redirections work with pipelines
+and background commands. Quote filenames containing spaces or literal `<` / `>`.
+Pipeline values are formatted as text, one value per line, when written to files.
+Errors still appear in the shell; file descriptor redirection and here-documents
+are not supported.
+
+```sh
+echo hello > greeting.txt
+echo again >> greeting.txt
+sort < greeting.txt | count > count.txt
+cat < greeting.txt
+```
+
+Create symbolic links with `ln -s TARGET LINK` (or `--symbolic`). Relative targets
+are interpreted from the link's directory; absolute targets refer to the workspace
+root. The target may be a file, a directory, or a path that does not exist yet.
+If `LINK` is a directory, the link is created inside it using the target's basename.
+Existing entries are never overwritten. Hard links are not supported.
+
+```sh
+ln -s docs shortcut
+ln -s ../notes.txt docs/notes-link.txt
+```
+
 `find [PATH...]` walks starting paths recursively, including the starting entries
 and hidden names. It defaults to `.`. `-name`/`--name` matches a basename using
 shell-style wildcard patterns; `-iname`/`--iname` ignores letter case.
@@ -180,7 +278,7 @@ Filters combine with AND. Quote wildcard patterns to pass them unchanged.
 
 Output records contain `name` (basename), `path` (relative to the current working
 directory, or absolute when the starting path is absolute), and `type` (`file`,
-`directory`, or `symlink`). The UI displays paths with the usual directory suffix;
+`directory`, or `symlink`). The UI displays one path per line;
 `select path` extracts plain paths. Symbolic links, including starting paths,
 are listed without following them. Errors are reported while traversal continues
 with other entries and starting paths; any error makes the command fail.
@@ -350,6 +448,13 @@ workspace and disables threads. Internet access is needed on first load.
 
 ## Development
 
+The UI uses Anytext 9.2 or newer from PyPI; no sibling checkout is required:
+
+```sh
+uv sync --all-extras
+uv run --extra anytext anyshell
+```
+
 ```sh
 uv run pytest
 uv run ruff check .
@@ -366,6 +471,9 @@ cd tests/browser
 npx playwright install chromium
 npm test
 ```
+
+To test a local Anytext checkout, pass `--anytext-source ../anytext` to the
+browser builder.
 
 Async engine and widget tests run on both asyncio and Trio. The engine depends
 on AnyIO and Cyclopts; install `anyshell[anytext]` for the UI and `anyshell[trio]` for Trio.

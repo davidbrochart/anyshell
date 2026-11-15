@@ -59,6 +59,13 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     assert.equal(await python("browser_app.query_one('CommandInput').value"), 'cat notes/fruits.txt | grep ^a | sort | count');
     await page.keyboard.press('ArrowDown');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value == ''"));
+    await page.keyboard.press('Control+r');
+    await page.keyboard.type('fruits');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('Shell').history_search_open and browser_app.query_one('CompletionPopup').display and browser_app.query_one('CompletionMenu').option_count == 1 and browser_app.query_one('Shell')._search_index == 0"));
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query_one('Shell').history_search_open and browser_app.query_one('CommandInput').value == session.history[0] and len(session.history) == 1 and not session.running"));
+    await page.keyboard.press('Control+c');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value == ''"));
     await page.keyboard.type('sleep 30');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value == 'sleep 30'"));
     await page.keyboard.press('Enter');
@@ -175,6 +182,26 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.keyboard.press('Control+c');
     await command('touch created.txt');
     assert.equal(await python("session.filesystem.stat('/created.txt')['size']"), 0);
+    await command('ln -s link-target.txt linked.txt');
+    assert.equal(await python("session.filesystem.entry_type('/linked.txt')"), 'symlink');
+    await command('write linked.txt "through link"');
+    assert.equal(await python("session.filesystem.read_text('/link-target.txt')"), 'through link\n');
+    await command('rm linked.txt link-target.txt');
+    await command('echo first >redirected.txt');
+    await command('echo second >>redirected.txt');
+    await command('cat <redirected.txt | count >line-count.txt');
+    assert.equal(await python("session.filesystem.read_text('/redirected.txt')"), 'first\nsecond\n');
+    assert.equal(await python("session.filesystem.read_text('/line-count.txt')"), '2\n');
+    await command('tail -n 1 redirected.txt');
+    assert.equal(await python("[e.value for e in browser_app.query_one('Shell').output if e.kind == 'output'][-1]"), 'second');
+    await page.keyboard.type('tail -n 1 -f redirected.txt');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("session.running and browser_app.query_one('Shell')._busy and browser_app.query_one('Shell').output[-1].value == 'second'"));
+    await python("session.filesystem.append_text('/redirected.txt', 'followed entry\\n')");
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("any(e.kind == 'output' and e.value == 'followed entry' for e in browser_app.query_one('Shell').output)"));
+    await page.keyboard.press('Control+c');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not session.running and not browser_app.query_one('Shell')._busy and session.last_status == 130"));
+    await command('rm redirected.txt line-count.txt');
     await page.keyboard.type('edit created.txt');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("any(area.has_focus for editor in browser_app.query('FileEditor') for area in editor.query('TextArea'))"));
@@ -284,8 +311,96 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await python("browser_app.query_one('CompletionPopup').scroll_to(x=1000, animate=False, immediate=True)");
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CompletionPopup').scroll_x > 0"));
     await page.keyboard.press('Escape');
-    await page.keyboard.press('Control+q');
+    await page.keyboard.press('Control+c');
+    await page.keyboard.press('Alt+v');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("len(browser_app.query('Shell')) == 2 and browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[-1] and browser_app.query_one('ShellWorkspace').active.query_one('CommandInput').has_focus"));
+    assert.equal(await python("browser_app.query_one('SplitPane').first.query_one('Shell') is browser_app.query_one('ShellWorkspace').panes[0] and browser_app.query_one('SplitPane').second.query_one('Shell') is browser_app.query_one('ShellWorkspace').panes[1]"), true);
+    const gestureScreen = await page.locator('.xterm-screen').boundingBox();
+    const gestureCellWidth = gestureScreen.width / await page.evaluate(() => window.anyshellDemo.terminal.cols);
+    const gestureCellHeight = gestureScreen.height / await page.evaluate(() => window.anyshellDemo.terminal.rows);
+    function mousePoint(x, y) {
+      return [gestureScreen.x + (x + 0.5) * gestureCellWidth,
+        gestureScreen.y + (y + 0.5) * gestureCellHeight];
+    }
+    async function panePoint(index) {
+      const [x, y] = JSON.parse(await python(`__import__('json').dumps((browser_app.query_one('ShellWorkspace').panes[${index}].query_one('CommandInput').region.x + 2, browser_app.query_one('ShellWorkspace').panes[${index}].query_one('CommandInput').region.y))`));
+      return mousePoint(x, y);
+    }
+    for (const hidden of [false, true]) {
+      if (hidden) {
+        await page.keyboard.press('Alt+d');
+        await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query_one('SplitPane').show_divider and browser_app.query_one('ShellWorkspace').panes[0].region.right == browser_app.query_one('ShellWorkspace').panes[1].region.x"));
+      }
+      const [beforeSize, x, y] = JSON.parse(await python("__import__('json').dumps((browser_app.query_one('SplitPane').first_size, browser_app.query_one('ShellWorkspace').panes[1].region.x + 4, browser_app.query_one('ShellWorkspace').panes[1].region.y + 4))"));
+      await page.keyboard.down('Alt');
+      await page.mouse.move(...mousePoint(x, y));
+      await page.mouse.down({button: 'right'});
+      await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.mouse_captured is browser_app.query_one('SplitPane').divider"));
+      await page.mouse.move(...mousePoint(x + 4, y), {steps: 4});
+      await page.mouse.up({button: 'right'});
+      await page.keyboard.up('Alt');
+      await page.waitForFunction(before => window.anyshellDemo.pyodide.runPython(`browser_app.query_one('SplitPane').first_size == ${before + 4} and browser_app.mouse_captured is None`), beforeSize);
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('SplitPane').position == 0.5"));
+    }
+    await page.keyboard.press('Alt+d');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('SplitPane').show_divider"));
+    await python("gesture_panes = list(browser_app.query_one('ShellWorkspace').panes); None");
+    for (const [source, destination] of [[0, 1], [1, 0]]) {
+      const start = await panePoint(source);
+      const end = await panePoint(destination);
+      await page.keyboard.down('Alt');
+      await page.mouse.move(...start);
+      await page.mouse.down();
+      await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.mouse_captured is browser_app.query_one('SplitPane')"));
+      await page.mouse.move(...end, {steps: 6});
+      await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('SplitPane')._drag_preview is not None and browser_app.query_one('SplitPane')._drag_preview.is_mounted"));
+      await page.mouse.up();
+      await page.keyboard.up('Alt');
+      // Spatial navigation needs the layout after reparenting, as well as the tree.
+      await page.waitForFunction(reversed => window.anyshellDemo.pyodide.runPython(`browser_app.query_one('ShellWorkspace').panes == gesture_panes[::${reversed ? -1 : 1}] and browser_app.mouse_captured is None and browser_app.query_one('ShellWorkspace').panes[0].region.right <= browser_app.query_one('ShellWorkspace').panes[1].region.x`), source === 0);
+    }
+    await page.keyboard.press('Alt+ArrowRight');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').active is gesture_panes[1] and gesture_panes[1].query_one('CommandInput').has_focus"));
+    await page.keyboard.type('echo split >shared.txt');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').active.session.history == ['echo split >shared.txt'] and not browser_app.query_one('ShellWorkspace').active._busy and session.filesystem.read_text('/shared.txt') == 'split\\n'"));
+    await page.keyboard.press('Alt+h');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("len(browser_app.query('Shell')) == 3 and browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[2] and browser_app.query_one('ShellWorkspace').active.query_one('CommandInput').has_focus and browser_app.query_one('ShellWorkspace').panes[2].region.y >= browser_app.query_one('ShellWorkspace').panes[1].region.bottom"));
+    const cornerBefore = JSON.parse(await python("__import__('json').dumps([split.first_size for split in browser_app.query('SplitPane')])"));
+    const [cornerX, cornerY] = JSON.parse(await python("__import__('json').dumps(tuple(browser_app.query_one('ShellWorkspace').active.region.offset))"));
+    await page.mouse.move(...mousePoint(cornerX, cornerY));
+    await page.mouse.down();
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.mouse_captured is list(browser_app.query('SplitPane'))[-1].divider"));
+    await page.mouse.move(...mousePoint(cornerX + 2, cornerY + 2), {steps: 3});
+    await page.waitForFunction(before => window.anyshellDemo.pyodide.runPython(`[split.first_size for split in browser_app.query('SplitPane')] == [${before[0] + 2}, ${before[1] + 2}]`), cornerBefore);
+    await page.keyboard.press('Escape');
+    // Wait for the terminal to decode the standalone Escape before mouse-up.
+    await page.waitForFunction(before => window.anyshellDemo.pyodide.runPython(`browser_app.mouse_captured is None and [split.first_size for split in browser_app.query('SplitPane')] == [${before[0]}, ${before[1]}]`), cornerBefore);
+    await page.mouse.up();
+    await page.keyboard.press('Alt+d');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("all(not split.show_divider for split in browser_app.query('SplitPane')) and browser_app.query_one('ShellWorkspace').panes[0].region.right == browser_app.query_one('ShellWorkspace').panes[1].region.x"));
+    await page.keyboard.press('Alt+d');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("all(split.show_divider for split in browser_app.query('SplitPane')) and browser_app.query_one('ShellWorkspace').panes[0].region.right + 1 == browser_app.query_one('ShellWorkspace').panes[1].region.x"));
+    await page.keyboard.press('Alt+ArrowUp');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[1] and browser_app.query_one('ShellWorkspace').active.query_one('CommandInput').has_focus"));
+    await page.keyboard.press('Alt+ArrowLeft');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[0]"));
+    await page.keyboard.press('Alt+ArrowRight');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[1]"));
+    await page.keyboard.press('Alt+ArrowDown');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[2]"));
+    await page.keyboard.press('Alt+ArrowUp');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[1]"));
+    await page.keyboard.type('exit');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("len(browser_app.query('Shell')) == 2 and browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[-1] and browser_app.query_one('ShellWorkspace').active.query_one('CommandInput').has_focus"));
+    await page.keyboard.press('Alt+w');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("len(browser_app.query('Shell')) == 1 and browser_app.query_one('CommandInput').has_focus"));
+    await page.keyboard.type('exit 17');
+    await page.keyboard.press('Enter');
     await page.waitForFunction(() => document.querySelector('#status').textContent.startsWith('Stopped'));
+    assert.equal(await python('browser_app.return_value'), 17);
     assert.equal(await page.locator('#error').isHidden(), true);
   } catch (error) {
     if (page) {

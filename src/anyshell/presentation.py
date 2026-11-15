@@ -20,9 +20,9 @@ def is_long_file_record(value) -> bool:
 
 
 def file_name(value) -> str:
-    return value.get("path", value["name"]) + (
-        "/" if value["type"] == "directory" else ""
-    )
+    if "path" in value:
+        return value["path"]
+    return value["name"] + ("/" if value["type"] == "directory" else "")
 
 
 def long_file_cells(value) -> tuple[str, str, str, str]:
