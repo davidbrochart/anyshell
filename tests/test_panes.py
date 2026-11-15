@@ -442,3 +442,50 @@ async def test_drag_wrapped_shell_border_corner(prompt_position, show_divider):
         assert pane.query_one(CommandInput).value == "keep draft"
         assert pane._task is task
         assert app.mouse_captured is None
+
+
+@pytest.mark.parametrize("key", ["alt+v", "alt+h"])
+@pytest.mark.parametrize("nested", [False, True])
+async def test_split_never_paints_an_incomplete_layout(monkeypatch, key, nested):
+    """A refresh during mounting shows the old layout or the completed split."""
+    app = ShellApp()
+    async with app.run_test(size=(100, 30)) as pilot:
+        workspace = app.query_one(ShellWorkspace)
+        if nested:
+            await pilot.press("alt+v")
+        original = workspace.active
+        parent = original.parent
+        frames = []
+        display = app._display
+        mount = parent.mount
+
+        def record_frame(screen, renderable):
+            # App._display suppresses terminal output while a batch is active.
+            if renderable is not None and not app._batch_count:
+                frames.append((tuple(parent.children), len(parent.query(Shell))))
+            return display(screen, renderable)
+
+        async def mount_with_refresh(*args, **kwargs):
+            result = mount(*args, **kwargs)
+            await result
+            # Force the frame that would otherwise depend on runner timing.
+            app.screen._on_timer_update()
+            return result
+
+        monkeypatch.setattr(app, "_display", record_frame)
+        monkeypatch.setattr(parent, "mount", mount_with_refresh)
+        await pilot.press(key)
+        await pilot.pause()
+        assert frames
+        for children, shells in frames:
+            assert len(children) == 1
+            if children[0] is original:
+                assert shells == 1
+            else:
+                assert isinstance(children[0], SplitPane)
+                assert shells == 2
+        split = parent.children[0]
+        assert isinstance(split, SplitPane)
+        assert split.orientation == ("horizontal" if key == "alt+v" else "vertical")
+        assert workspace.active is not original
+        assert workspace.active.query_one(CommandInput).has_focus

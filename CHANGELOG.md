@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Paint pane splits only after both shells are mounted in the finished layout,
+  preventing a brief top/bottom split during Alt+V.
+
 ## 0.3.0 — 2026-11-15
 
 - Require the published Anytext 9.2 release for desktop and browser UI features,
