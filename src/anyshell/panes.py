@@ -149,11 +149,14 @@ class ShellWorkspace(Widget):
             "Drag or Alt+right-drag to resize; Alt+left-drag swaps panes; "
             "arrows adjust; Enter resets; Alt+D toggles lines"
         )
-        await original.parent.mount(split, before=original)
-        original.reparent(first)
-        self._replace(original, _Split(original, new, split))
-        self.panes.insert(self.panes.index(original) + 1, new)
-        await second.mount(new)
+        # Mounting yields to the UI before the original shell is reparented.
+        # Paint only once both live panes are inside the completed split.
+        with self.app.batch_update():
+            await original.parent.mount(split, before=original)
+            original.reparent(first)
+            self._replace(original, _Split(original, new, split))
+            self.panes.insert(self.panes.index(original) + 1, new)
+            await second.mount(new)
         await self._settle_layout()
         self.active = new
         self._focus_active()
