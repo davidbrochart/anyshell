@@ -48,7 +48,9 @@ try {
   if (!response.ok) throw new Error("Could not load wheel.json");
   const manifest = await response.json();
   pyodide.globals.set("wheel_url", new URL(manifest.wheel, location.href).href);
-  await pyodide.runPythonAsync("import micropip; await micropip.install(['anytext>=9.1,<10', wheel_url])");
+  pyodide.globals.set("anytext_requirement", manifest.anytext
+    ? new URL(manifest.anytext, location.href).href : "anytext>=9.2,<10");
+  await pyodide.runPythonAsync("import micropip; await micropip.install([anytext_requirement, wheel_url])");
   pyodide.globals.set("terminal_write", (data) => terminal.write(data));
   pyodide.globals.set("prompt_position", promptPosition);
   pyodide.globals.set("terminal_cols", terminal.cols);
@@ -66,7 +68,18 @@ try {
   const input = pyodide.globals.get("browser_input");
   resize = pyodide.globals.get("browser_resize");
   proxies.push(input, resize);
+  const paneArrows = { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D" };
   terminal.attachCustomKeyEventHandler((event) => {
+    // Xterm maps Alt+Left/Right to word-motion sequences on some platforms.
+    // Keep the pane-navigation keys distinct for Anytext.
+    if (ready && event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey &&
+        paneArrows[event.key]) {
+      event.preventDefault();
+      if (event.type === "keydown") {
+        input(`\x1b[1;3${paneArrows[event.key]}`);
+      }
+      return false;
+    }
     if (ready && event.key === "Enter" && !event.altKey && !event.metaKey &&
         (event.shiftKey || event.ctrlKey)) {
       event.preventDefault();

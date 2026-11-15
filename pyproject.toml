@@ -13,14 +13,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-anytext = ["anytext>=9.1,<10"]
+anytext = ["anytext>=9.2,<10"]
 trio = ["trio>=0.31"]
 
 [project.scripts]
 anyshell = "anyshell.__main__:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff==0.17.4", "trio>=0.31", "anytext>=9.1,<10", "uv_build>=0.13.5,<0.14"]
+dev = ["pytest>=8", "ruff==0.17.4", "trio>=0.31", "anytext>=9.2,<10", "uv_build>=0.13.5,<0.14"]
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14"]

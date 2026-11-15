@@ -44,7 +44,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.11,<5" },
-    { name = "anytext", marker = "extra == 'anytext'", specifier = ">=9.1,<10" },
+    { name = "anytext", marker = "extra == 'anytext'", specifier = ">=9.2,<10" },
     { name = "cyclopts", specifier = ">=5.4,<6" },
     { name = "trio", marker = "extra == 'trio'", specifier = ">=0.31" },
 ]
@@ -52,7 +52,7 @@ provides-extras = ["anytext", "trio"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "anytext", specifier = ">=9.1,<10" },
+    { name = "anytext", specifier = ">=9.2,<10" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = "==0.17.4" },
     { name = "trio", specifier = ">=0.31" },
@@ -61,7 +61,7 @@ dev = [
 
 [[package]]
 name = "anytext"
-version = "9.1.0"
+version = "9.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -73,9 +73,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/46/0e/97aa2f4069686a35716e08f310c0366f090639ce5132e51cfd8bd3eeb77b/anytext-9.1.0.tar.gz", hash = "sha256:c911380d7c78307ca6c871833c908ee87d9b9f33dab18d69b906462180ef3739", size = 1654979, upload-time = "2026-11-08T18:53:52.128Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/5d/e4b7d64d4d0621346167d04d6a8f6b907ffc07aa5b18db24e28c9ca37c0f/anytext-9.2.0.tar.gz", hash = "sha256:41ae3a92059f2e619f96db10fd85717b4420423cec7e0d1589370532fd069619", size = 1043282, upload-time = "2026-11-15T19:52:00.088Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/35/9e53097518c72c21fcc514aca82d85ea2c45ed4f68bc84302a983dbb041f/anytext-9.1.0-py3-none-any.whl", hash = "sha256:280225f6b5e1fc699034ba508cf24c899aec8a014906cfa8e2c9408ec8bd2fd8", size = 748462, upload-time = "2026-11-08T18:53:50.344Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/4d/7760d216d14fa7af6d82c96372487613bb43c23811c9ec022c379f147fa1/anytext-9.2.0-py3-none-any.whl", hash = "sha256:380032ad2f802799bc41da92225cbc36f75db7f93841ff266849ff850f8fc555", size = 754042, upload-time = "2026-11-15T19:51:58.295Z" },
 ]
 
 [[package]]

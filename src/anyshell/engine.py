@@ -5,7 +5,7 @@ from __future__ import annotations
 import posixpath
 import shlex
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from inspect import BoundArguments, isawaitable
 from io import StringIO
@@ -30,7 +30,9 @@ class ShellError(Exception):
 
 @dataclass(frozen=True)
 class Event:
-    kind: Literal["output", "error", "clear", "cwd", "status", "edit", "page", "job"]
+    kind: Literal[
+        "output", "error", "clear", "cwd", "status", "edit", "page", "job", "exit"
+    ]
     value: Any = None
 
 
@@ -144,6 +146,7 @@ class _Invocation:
     ignored: dict[str, Any]
     help_output: StringIO
     is_help: bool
+    redirections: list[tuple[str, str]] = field(default_factory=list)
 
     async def run(self, context: Context, stdin, stdout) -> None:
         injected = {
@@ -178,7 +181,7 @@ class Job:
     done: anyio.Event = field(default_factory=anyio.Event, repr=False)
 
 
-def parse_pipeline(source: str) -> list[list[str]]:
+def _pipeline_parts(source: str) -> list[str]:
     """Split unquoted pipes, then parse each stage with shell-style quoting."""
     parts: list[str] = []
     start = 0
@@ -198,6 +201,11 @@ def parse_pipeline(source: str) -> list[list[str]]:
             parts.append(source[start:index])
             start = index + 1
     parts.append(source[start:])
+    return parts
+
+
+def parse_pipeline(source: str) -> list[list[str]]:
+    parts = _pipeline_parts(source)
     try:
         stages = [shlex.split(part) for part in parts]
     except ValueError as error:
@@ -207,6 +215,89 @@ def parse_pipeline(source: str) -> list[list[str]]:
     if any(not stage for stage in stages):
         raise ShellError("empty pipeline stage")
     return stages
+
+
+def _parse_redirections(source: str) -> tuple[list[str], list[tuple[str, str]]]:
+    tokens = []
+    start = 0
+    quote = ""
+    escaped = False
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "<>":
+            chunk = source[start:index]
+            if chunk and chunk[-1].isdigit() and chunk.split()[-1].isdigit():
+                raise ShellError("file descriptor redirection is not supported")
+            tokens.extend((word, False) for word in shlex.split(chunk))
+            operator = char
+            if index + 1 < len(source) and source[index + 1] == char:
+                operator += char
+                index += 1
+            if operator == "<<":
+                raise ShellError("here-documents are not supported")
+            tokens.append((operator, True))
+            start = index + 1
+        index += 1
+    tokens.extend((word, False) for word in shlex.split(source[start:]))
+    arguments = []
+    redirections = []
+    index = 0
+    while index < len(tokens):
+        token, operator = tokens[index]
+        if operator:
+            if index + 1 == len(tokens) or tokens[index + 1][1]:
+                raise ShellError(f"missing filename after {token}")
+            redirections.append((token, tokens[index + 1][0]))
+            index += 2
+        else:
+            arguments.append(token)
+            index += 1
+    if not arguments:
+        raise ShellError("redirection requires a command")
+    return arguments, redirections
+
+
+class _FileInput:
+    def __init__(self, lines):
+        self.lines = lines
+
+    async def receive(self):
+        await anyio.lowlevel.checkpoint()
+        try:
+            return next(self.lines)
+        except StopIteration:
+            raise anyio.EndOfStream from None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return await self.receive()
+        except anyio.EndOfStream:
+            raise StopAsyncIteration from None
+
+
+class _FileOutput:
+    def __init__(self, filesystem, path):
+        self.filesystem = filesystem
+        self.path = path
+
+    async def send(self, value):
+        from .presentation import format_value
+
+        self.filesystem.append_text(self.path, format_value(value) + "\n")
+        await anyio.lowlevel.checkpoint()
 
 
 def _scan_jobs(
@@ -300,6 +391,7 @@ class Session:
         self.commands: dict[str, Command] = {}
         self._scope: anyio.CancelScope | None = None
         self.last_status = 0
+        self.exit_status: int | None = None
         self._executing = False
         self.jobs: dict[int, Job] = {}
         self._next_job_id = 1
@@ -341,6 +433,7 @@ class Session:
         self._next_job_id += 1
         child = Session(self.filesystem)
         child.cwd = self.cwd
+        child.last_status = self.last_status
         child.commands = self.commands.copy()
         child.jobs = self.jobs.copy()
 
@@ -393,6 +486,8 @@ class Session:
     async def execute(
         self, source: str, emit: Emitter, *, output_width: int = 88
     ) -> Result:
+        if self.exit_status is not None:
+            raise ShellError("this session has exited")
         if output_width < 1:
             raise ValueError("output_width must be positive")
         if self.running:
@@ -425,11 +520,13 @@ class Session:
                             "background commands require a Session.background() context"
                         )
                     commands = []
-                    for stage in stages:
+                    for part in _pipeline_parts(text):
+                        stage, redirections = _parse_redirections(part)
                         if stage[0] not in self.commands:
                             raise ShellError(f"command not found: {stage[0]}")
                         command = self.commands[stage[0]]
                         invocation = command.prepare(stage[1:], width=output_width)
+                        invocation.redirections = redirections
                         if (
                             len(stages) > 1
                             and command.standalone
@@ -450,6 +547,9 @@ class Session:
                         status = await self._pipeline(
                             commands, emit, output_width=output_width
                         )
+                    self.last_status = status
+                    if self.exit_status is not None:
+                        break
             except (ShellError, OSError, ValueError) as error:
                 status = 1
                 await emit(
@@ -462,6 +562,8 @@ class Session:
         if self.cwd != previous_cwd:
             await emit(Event("cwd", self.cwd))
         await emit(Event("status", self.last_status))
+        if self.exit_status is not None:
+            await emit(Event("exit", self.exit_status))
         return Result(self.last_status, cancelled)
 
     async def _pipeline(
@@ -479,7 +581,24 @@ class Session:
             send = streams[index + 1][0]
             async with receive, send:
                 try:
-                    await commands[index].run(context, receive, send)
+                    with ExitStack() as stack:
+                        stdin, stdout = receive, send
+                        for operator, name in commands[index].redirections:
+                            path = context.resolve(name)
+                            if operator == "<":
+                                # Preflight the file even when the command ignores stdin.
+                                lines = iter(self.filesystem.read_lines(path))
+                                if (close := getattr(lines, "close", None)) is not None:
+                                    stack.callback(close)
+                                stdin = _FileInput(lines)
+                                await receive.aclose()
+                            else:
+                                if operator == ">":
+                                    self.filesystem.write_text(path, "")
+                                else:
+                                    self.filesystem.append_text(path, "")
+                                stdout = _FileOutput(self.filesystem, path)
+                        await commands[index].run(context, stdin, stdout)
                 except anyio.BrokenResourceError:
                     # A downstream command may deliberately stop consuming input.
                     pass
@@ -499,6 +618,8 @@ class Session:
             for send, receive in streams:
                 await send.aclose()
                 await receive.aclose()
+        if self.exit_status is not None:
+            return self.exit_status
         return int(any(statuses))  # A failure in any stage fails the pipeline.
 
     async def complete(self, source: str) -> list[str]:

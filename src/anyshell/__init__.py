@@ -11,13 +11,14 @@ from .engine import (
     Session,
     ShellError,
 )
-from .filesystem import FileSystem, LocalFileSystem, MemoryFileSystem
+from .filesystem import FileHandle, FileSystem, LocalFileSystem, MemoryFileSystem
 
 __all__ = [
     "Command",
     "Context",
     "EditRequest",
     "Event",
+    "FileHandle",
     "FileSystem",
     "Job",
     "LocalFileSystem",

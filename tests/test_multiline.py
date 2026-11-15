@@ -103,7 +103,7 @@ async def test_enter_continues_incomplete_command(prompt_position, start, end, o
         assert editor.size.height == 1
         await pilot.press("up")
         assert editor.value == session.history[0]
-        await pilot.press("alt+down")
+        await pilot.press("ctrl+down")
         assert editor.value == ""
 
 

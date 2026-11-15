@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+- Require the published Anytext 9.2 release for desktop and browser UI features,
+  replacing the default editable sibling checkout.
+
+- Add `tail` with `-n`, file and pipeline input, and cancellable `tail -f`
+  following on local and in-memory filesystems, including truncation handling.
+
+- Add async `fs.open()` read handles with independent cursors and latched change
+  notifications. `tail -f` waits for Anyshell filesystem mutations without
+  polling, OS watchers, or extra threads.
+
+- Resize splits by dragging shell borders and shared corners, or with
+  Alt+right-drag over pane content. Swap live panes with Alt+left-drag,
+  preserving session state and keyboard navigation after swaps.
+
+- Toggle split divider lines with Alt+D while retaining invisible drag handles.
+
+- Focus neighboring panes spatially with Alt+Up/Down/Left/Right, and use
+  Ctrl+Up/Down for whole-command history in the multiline editor.
+
+- Add `exit [STATUS]` to close the issuing pane, quit the last pane, or end a
+  headless session, cancelling its background jobs and skipping later commands.
+
+- Use Anytext's `Widget.reparent()` for live shell panes, removing placeholder
+  widgets and manual pane positioning. Allow browser builds to bundle a local
+  Anytext checkout with `--anytext-source`.
+
+- Add nested side-by-side and stacked shell panes with Anytext `SplitPane`,
+  draggable dividers, pane navigation and closing, and independent sessions over
+  a shared filesystem. Preserve live commands and drafts across layout changes.
+
+- Add a Ctrl+R history-search popup with live substring matching, arrow navigation,
+  accepting a command for editing, and cancellation that restores the draft.
+
+- Support `>`, `>>`, and `<` file redirections in commands, pipelines, and
+  background jobs on local and in-memory filesystems.
+
+- Add `ln -s` / `ln --symbolic` with relative, absolute workspace, directory, and
+  dangling symbolic links in both local and in-memory filesystems.
+
+- Display `find` results as one path per line, preserving structured pipeline
+  records and keeping `ls` output in columns.
+
 ## 0.2.1 — 2026-11-14
 
 - Append a space after completed command names, ready for arguments.

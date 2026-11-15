@@ -65,7 +65,8 @@ def main() -> None:
                 result = await session.execute(
                     args.command, emit, output_width=get_terminal_size((88, 24)).columns
                 )
-                await session.wait_jobs()
+                if session.exit_status is None:
+                    await session.wait_jobs()
                 return result.status
 
         try:

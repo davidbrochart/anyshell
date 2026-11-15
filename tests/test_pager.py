@@ -68,6 +68,7 @@ async def test_more_files_navigation_and_restoration(filesystem, prompt_position
         await wait_until(lambda: not shell._busy)
         assert not app.query(Pager)
         assert session.last_status == 0 and app.is_running
+        await wait_until(lambda: app.query_one(CommandInput).has_focus)
         assert app.query_one(CommandInput).has_focus
         assert app.query_one(RichLog) is transcript
         assert not any("line 119" in line.text for line in transcript.lines)
@@ -140,6 +141,7 @@ async def test_more_reports_read_errors(filesystem, prompt_position, command):
             assert any(line.startswith(f"{command}: ") for line in lines)
             if len(error) <= app.query_one(RichLog).scrollable_content_region.width:
                 assert error in lines
+            await wait_until(lambda: app.query_one(CommandInput).has_focus)
             assert app.query_one(CommandInput).has_focus
 
 
@@ -436,3 +438,50 @@ async def test_pager_file_errors_use_portable_messages(
         f"{command}: {message}"
     ]
     assert not any(event.kind == "page" for event in events)
+
+
+async def test_pager_readiness_callbacks_after_removal_are_ignored():
+    """A queued resize/EOF callback cannot query children during teardown."""
+    from anytext import events
+    from anytext.geometry import Size
+
+    from anyshell import PageRequest
+
+    async def lines():
+        yield "content"
+
+    app = ShellApp()
+    async with app.run_test() as pilot:
+        pager = Pager(PageRequest("pending readiness", lines()))
+        await app.mount(pager)
+        log = pager.query_one(PagerLog)
+        await pager.load()
+        await pager.remove()
+        # Exercise the callbacks even when removal won the race with refresh.
+        pager._mark_loaded()
+        log.on_resize(events.Resize(Size(60, 20), Size(60, 20)))
+        await pilot.pause()
+        assert not app.query(Pager)
+
+
+async def test_closed_pager_readiness_cannot_take_focus():
+    """Closing before the first readiness callback prevents a stale handoff."""
+    from anyshell import PageRequest
+
+    async def lines():
+        yield "content"
+
+    app = ShellApp()
+    async with app.run_test() as pilot:
+        pager = Pager(PageRequest("closing before readiness", lines()))
+        await app.mount(pager)
+        await pilot.pause()
+        assert pager.query_one(PagerLog).scrollable_content_region.height > 0
+        await pager.load()
+        pager.closed.set()
+        editor = app.query_one(CommandInput)
+        app.screen.set_focus(editor, scroll_visible=False)
+        pager._mark_loaded()
+        await pilot.pause()
+        assert not pager.loaded
+        assert editor.has_focus

@@ -25,6 +25,8 @@ class PagerLog(SelectableLog, can_focus=False):
     search_pattern: re.Pattern[str] | None = None
 
     def on_resize(self, event) -> None:
+        if not self.is_attached or self._pruning:
+            return
         super().on_resize(event)
         self.call_after_refresh(self.query_ancestor(Pager)._mark_loaded)
 
@@ -141,7 +143,12 @@ class Pager(Vertical, can_focus=True):
             self.call_after_refresh(self._mark_loaded)
 
     def _mark_loaded(self) -> None:
-        if self.is_mounted and self._eof:
+        if (
+            self.is_attached
+            and not self._pruning
+            and not self.closed.is_set()
+            and self._eof
+        ):
             region = self.query_one(PagerLog).scrollable_content_region
             if region.width > 0 and region.height > 0:
                 if not self.loaded and not self._searching:
