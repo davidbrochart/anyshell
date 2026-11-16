@@ -34,8 +34,14 @@ editor, run `uv run --extra anytext anyshell --prompt-position bottom` or constr
 | Alt+Up / Alt+Down / Alt+Left / Alt+Right | Focus the pane in that direction |
 | Alt+W | Close the active pane (keep at least one) |
 | Alt+D | Show or hide split dividers |
+| Alt+O | Show or hide terminal borders |
 
 Drag a divider or the shell border to resize; shared corners adjust both axes.
+Terminal borders are hidden by default. Alt+O toggles them for all current and
+future panes. Split dividers are
+controlled independently with Alt+D; Alt+right-drag also resizes borderless panes.
+The active pane has a subtle background tint, keeping focus visible even when
+both borders and divider lines are hidden.
 You can also focus a divider and use the arrow keys. Alt+right-drag
 inside a pane resizes its containing split. Alt+left-drag a pane onto another
 pane to swap their positions while keeping their sessions and drafts. Hidden dividers
@@ -448,7 +454,7 @@ workspace and disables threads. Internet access is needed on first load.
 
 ## Development
 
-The UI uses Anytext 9.2 or newer from PyPI; no sibling checkout is required:
+The UI uses Anytext 9.2.1 or newer from PyPI; no sibling checkout is required:
 
 ```sh
 uv sync --all-extras

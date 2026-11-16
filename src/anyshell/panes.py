@@ -28,14 +28,29 @@ class ShellWorkspace(Widget):
 
     DEFAULT_CSS = """
     ShellWorkspace { width: 1fr; height: 1fr; }
-    ShellWorkspace Shell { min-width: 0; min-height: 0; }
+    ShellWorkspace Shell { min-width: 0; min-height: 0; background: $surface; }
     ShellWorkspace Shell.pane-inactive { border: round $primary 30%; }
+    ShellWorkspace Shell.pane-active,
+    ShellWorkspace Shell.pane-active #shell-scroll,
+    ShellWorkspace Shell.pane-active Transcript,
+    ShellWorkspace Shell.pane-active CommandInput,
+    ShellWorkspace Shell.pane-active RunningCursor,
+    ShellWorkspace Shell.pane-active Pager,
+    ShellWorkspace Shell.pane-active PagerLog,
+    ShellWorkspace Shell.pane-active FileEditor,
+    ShellWorkspace Shell.pane-active #editor-window,
+    ShellWorkspace Shell.pane-active FileTextArea {
+        background-tint: $foreground 4%;
+    }
+    ShellWorkspace.-borderless Shell,
+    ShellWorkspace.-borderless Shell.pane-inactive { border: none; }
     """
 
     def __init__(self, session: Session, *, prompt_position="inline"):
-        super().__init__()
+        super().__init__(classes="-borderless")
         self.prompt_position = prompt_position
         self.show_dividers = True
+        self.show_borders = False
         self.active = Shell(session, prompt_position=prompt_position)
         self.panes = [self.active]
         self._tree: Shell | _Split = self.active
@@ -112,6 +127,7 @@ class ShellWorkspace(Widget):
 
     def _mark_active(self):
         for pane in self.panes:
+            pane.set_class(len(self.panes) > 1 and pane is self.active, "pane-active")
             pane.set_class(
                 len(self.panes) > 1 and pane is not self.active, "pane-inactive"
             )
@@ -195,6 +211,11 @@ class ShellWorkspace(Widget):
         for split in self.query(SplitPane):
             split.show_divider = self.show_dividers
 
+    def toggle_borders(self):
+        """Toggle borders for existing panes and panes mounted later."""
+        self.show_borders = not self.show_borders
+        self.set_class(not self.show_borders, "-borderless")
+
     async def close_active(self):
         await self.close_pane(self.active)
 
@@ -215,15 +236,19 @@ class ShellWorkspace(Widget):
         parent = find_parent(self._tree)
         sibling = parent.second if parent.first is closing else parent.first
         survivor = sibling.widget if isinstance(sibling, _Split) else sibling
-        survivor.reparent(parent.widget.parent, before=parent.widget)
-        self._replace(parent, sibling)
-        self.panes.remove(closing)
-        remaining = (
-            self.panes[min(index, len(self.panes) - 1)]
-            if previous_active is closing
-            else previous_active
-        )
-        await parent.widget.remove()
+        # Promotion and removal must not paint as two stacked siblings.
+        with self.app.batch_update():
+            survivor.reparent(parent.widget.parent, before=parent.widget)
+            self._replace(parent, sibling)
+            self.panes.remove(closing)
+            remaining = (
+                self.panes[min(index, len(self.panes) - 1)]
+                if previous_active is closing
+                else previous_active
+            )
+            await parent.widget.remove()
+            self.active = remaining
+            self._mark_active()
         await self._settle_layout()
         self.active = remaining
         self._focus_active()

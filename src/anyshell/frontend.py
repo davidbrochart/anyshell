@@ -880,6 +880,7 @@ class ShellApp(App, inherit_bindings=False):
         Binding("alt+down", "focus_pane('down')", show=False, priority=True),
         Binding("alt+w", "close_pane", "Close pane", priority=True),
         Binding("alt+d", "toggle_dividers", "Dividers", priority=True),
+        Binding("alt+o", "toggle_borders", "Borders", priority=True),
     ]
 
     def __init__(
@@ -920,6 +921,11 @@ class ShellApp(App, inherit_bindings=False):
         from .panes import ShellWorkspace
 
         self.query_one(ShellWorkspace).toggle_dividers()
+
+    def action_toggle_borders(self) -> None:
+        from .panes import ShellWorkspace
+
+        self.query_one(ShellWorkspace).toggle_borders()
 
     @on(Shell.Exited)
     async def shell_exited(self, event: Shell.Exited) -> None:

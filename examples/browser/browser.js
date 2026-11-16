@@ -49,7 +49,7 @@ try {
   const manifest = await response.json();
   pyodide.globals.set("wheel_url", new URL(manifest.wheel, location.href).href);
   pyodide.globals.set("anytext_requirement", manifest.anytext
-    ? new URL(manifest.anytext, location.href).href : "anytext>=9.2,<10");
+    ? new URL(manifest.anytext, location.href).href : "anytext>=9.2.1,<10");
   await pyodide.runPythonAsync("import micropip; await micropip.install([anytext_requirement, wheel_url])");
   pyodide.globals.set("terminal_write", (data) => terminal.write(data));
   pyodide.globals.set("prompt_position", promptPosition);
