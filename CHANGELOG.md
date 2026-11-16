@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Require Anytext 9.2.1 for desktop and browser UI, with joined split dividers
+  and transparent divider backgrounds that stay unchanged during interaction.
+
+- Keep pane promotion and removal in one visual update when closing a split,
+  avoiding a temporary jump of the surviving pane.
+
+- Hide terminal borders by default; Alt+O restores them when desired.
+
+- Give the active pane a subtle, theme-aware background tint, including its
+  prompt, output, pager, and editor, so borderless panes remain distinguishable.
+
+- Toggle terminal borders with Alt+O, including inactive and newly created panes.
+
 - Paint pane splits only after both shells are mounted in the finished layout,
   preventing a brief top/bottom split during Alt+V.
 

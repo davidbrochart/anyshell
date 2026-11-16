@@ -35,6 +35,11 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
       "bool(browser_app.query('CommandInput')) and browser_app.query_one('CommandInput').has_focus"));
     assert.equal(await python("browser_app.query_one('Shell').prompt_position"), promptPosition);
+    assert.equal(await python("not browser_app.query_one('ShellWorkspace').show_borders and not any(browser_app.query_one('Shell').styles.border.spacing)"), true);
+    await page.keyboard.press('Alt+o');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').show_borders and any(browser_app.query_one('Shell').styles.border.spacing)"));
+    await page.keyboard.press('Alt+o');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query_one('ShellWorkspace').show_borders and not any(browser_app.query_one('Shell').styles.border.spacing) and browser_app.query_one('CommandInput').has_focus"));
     for (const viewport of [{width: 390, height: 640}, {width: 800, height: 400}, {width: 390, height: 420}, {width: 1100, height: 760}]) {
       await page.setViewportSize(viewport);
       await page.waitForFunction(() => {
@@ -367,6 +372,8 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').active.session.history == ['echo split >shared.txt'] and not browser_app.query_one('ShellWorkspace').active._busy and session.filesystem.read_text('/shared.txt') == 'split\\n'"));
     await page.keyboard.press('Alt+h');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("len(browser_app.query('Shell')) == 3 and browser_app.query_one('ShellWorkspace').active is browser_app.query_one('ShellWorkspace').panes[2] and browser_app.query_one('ShellWorkspace').active.query_one('CommandInput').has_focus and browser_app.query_one('ShellWorkspace').panes[2].region.y >= browser_app.query_one('ShellWorkspace').panes[1].region.bottom"));
+    await page.keyboard.press('Alt+o');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('ShellWorkspace').show_borders and all(any(pane.styles.border.spacing) for pane in browser_app.query_one('ShellWorkspace').panes)"));
     const cornerBefore = JSON.parse(await python("__import__('json').dumps([split.first_size for split in browser_app.query('SplitPane')])"));
     const [cornerX, cornerY] = JSON.parse(await python("__import__('json').dumps(tuple(browser_app.query_one('ShellWorkspace').active.region.offset))"));
     await page.mouse.move(...mousePoint(cornerX, cornerY));
@@ -380,6 +387,11 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.mouse.up();
     await page.keyboard.press('Alt+d');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("all(not split.show_divider for split in browser_app.query('SplitPane')) and browser_app.query_one('ShellWorkspace').panes[0].region.right == browser_app.query_one('ShellWorkspace').panes[1].region.x"));
+    await page.keyboard.press('Alt+o');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not browser_app.query_one('ShellWorkspace').show_borders and all(not any(pane.styles.border.spacing) for pane in browser_app.query_one('ShellWorkspace').panes) and browser_app.query_one('ShellWorkspace').active.background_colors[1] != browser_app.query_one('ShellWorkspace').panes[0].background_colors[1]"));
+    await page.screenshot({path: path.join(root, `.cache/browser-borderless-${promptPosition}.png`)});
+    await page.keyboard.press('Alt+o');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("all(any(pane.styles.border.spacing) for pane in browser_app.query_one('ShellWorkspace').panes)"));
     await page.keyboard.press('Alt+d');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("all(split.show_divider for split in browser_app.query('SplitPane')) and browser_app.query_one('ShellWorkspace').panes[0].region.right + 1 == browser_app.query_one('ShellWorkspace').panes[1].region.x"));
     await page.keyboard.press('Alt+ArrowUp');

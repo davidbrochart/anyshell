@@ -421,7 +421,7 @@ async def test_drag_wrapped_shell_border_corner(prompt_position, show_divider):
     app = ShellApp(prompt_position=prompt_position)
     async with app.run_test(size=(100, 30)) as pilot:
         workspace = app.query_one(ShellWorkspace)
-        await pilot.press("alt+v", "alt+h")
+        await pilot.press("alt+o", "alt+v", "alt+h")
         if not show_divider:
             await pilot.press("alt+d")
         for _ in range(3):
@@ -489,3 +489,162 @@ async def test_split_never_paints_an_incomplete_layout(monkeypatch, key, nested)
         assert split.orientation == ("horizontal" if key == "alt+v" else "vertical")
         assert workspace.active is not original
         assert workspace.active.query_one(CommandInput).has_focus
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_border_shortcut_applies_to_existing_and_future_panes(prompt_position):
+    """Border visibility survives focus, splitting, and independent divider toggles."""
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test(size=(100, 30)) as pilot:
+        workspace = app.query_one(ShellWorkspace)
+        first = workspace.active
+        first.query_one(CommandInput).value = "keep draft"
+        assert not workspace.show_borders
+        assert not any(first.styles.border.spacing)
+        await pilot.press("alt+o")
+        await pilot.pause()
+        assert workspace.show_borders and any(first.styles.border.spacing)
+        await pilot.press("alt+o")
+        await pilot.pause()
+        assert not workspace.show_borders
+        assert not any(first.styles.border.spacing)
+        assert first.query_one(CommandInput).value == "keep draft"
+        assert first.query_one(CommandInput).has_focus
+        await pilot.press("alt+v", "alt+h")
+        await pilot.pause()
+        assert len(workspace.panes) == 3
+        assert all(not any(pane.styles.border.spacing) for pane in workspace.panes)
+        assert all(split.show_divider for split in workspace.query(SplitPane))
+        await pilot.press("alt+left", "alt+d")
+        await pilot.pause()
+        assert workspace.active is first
+        assert all(not any(pane.styles.border.spacing) for pane in workspace.panes)
+        assert all(not split.show_divider for split in workspace.query(SplitPane))
+        await pilot.press("alt+o")
+        await pilot.pause()
+        assert workspace.show_borders
+        assert all(any(pane.styles.border.spacing) for pane in workspace.panes)
+        assert all(not split.show_divider for split in workspace.query(SplitPane))
+        assert first.query_one(CommandInput).value == "keep draft"
+        assert first.query_one(CommandInput).has_focus
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+@pytest.mark.parametrize("theme", ["anytext-dark", "anytext-light"])
+async def test_active_pane_background_follows_focus_without_separators(
+    prompt_position, theme
+):
+    """Theme-aware backgrounds identify focus without consuming pane space."""
+    from anyshell.frontend import Transcript
+
+    app = ShellApp(prompt_position=prompt_position)
+    app.theme = theme
+    async with app.run_test(size=(100, 30)) as pilot:
+        workspace = app.query_one(ShellWorkspace)
+        first = workspace.active
+        await pilot.press("alt+d", "alt+v")
+        for _ in range(3):
+            await pilot.pause()
+        second = workspace.active
+        assert second.has_class("pane-active")
+        assert first.has_class("pane-inactive")
+        assert not any(first.styles.border.spacing)
+        assert not any(second.styles.border.spacing)
+        assert first.region.right == second.region.x
+        assert first.background_colors[1] != second.background_colors[1]
+        for pane in (first, second):
+            for widget in (pane.query_one(Transcript), pane.query_one(CommandInput)):
+                assert widget.background_colors[1] == pane.background_colors[1]
+        await pilot.press("alt+left")
+        await pilot.pause()
+        assert first.has_class("pane-active")
+        assert not second.has_class("pane-active")
+        assert (
+            first.query_one(CommandInput).background_colors[1]
+            == first.background_colors[1]
+        )
+        await pilot.click(second, offset=(3, 3))
+        await pilot.pause()
+        assert workspace.active is second and second.has_class("pane-active")
+        assert second.query_one(CommandInput).has_focus
+        await pilot.press("alt+w")
+        await pilot.pause()
+        assert workspace.panes == [first]
+        assert not first.has_class("pane-active")
+        assert not first.has_class("pane-inactive")
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+@pytest.mark.parametrize("command", ["less", "edit"])
+async def test_active_pane_tints_pager_and_editor(prompt_position, command):
+    """Interactive views retain the active pane's visual identity."""
+    from anyshell.editor import FileEditor, FileTextArea
+    from anyshell.pager import Pager, PagerLog
+
+    app = ShellApp(
+        Session(MemoryFileSystem({"file": "hello\n"})), prompt_position=prompt_position
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        workspace = app.query_one(ShellWorkspace)
+        await pilot.press("alt+d", "alt+v")
+        pane = workspace.active
+        pane.query_one(CommandInput).value = f"{command} file"
+        await pilot.press("enter")
+        view_type = Pager if command == "less" else FileEditor
+        await wait_until(lambda: bool(pane.query(view_type)))
+        await pilot.pause()
+        view = pane.query_one(view_type)
+        content = view.query_one(PagerLog if command == "less" else FileTextArea)
+        assert view.background_colors[1] == pane.background_colors[1]
+        assert content.background_colors[1] == pane.background_colors[1]
+        await pilot.press("ctrl+q")
+        await wait_until(
+            lambda: not pane._busy and pane.query_one(CommandInput).has_focus
+        )
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+@pytest.mark.parametrize("key", ["alt+h", "alt+v"])
+@pytest.mark.parametrize("nested", [False, True])
+async def test_close_never_paints_promoted_pane_beside_old_split(
+    monkeypatch, prompt_position, key, nested
+):
+    """A surviving pane expands without an intermediate sibling layout."""
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test(size=(100, 30)) as pilot:
+        workspace = app.query_one(ShellWorkspace)
+        if nested:
+            await pilot.press("alt+v")
+        survivor = workspace.active
+        await pilot.press(key)
+        closing = workspace.active
+        split = closing.query_ancestor(SplitPane)
+        parent = split.parent
+        frames = []
+        display = app._display
+        remove = split.remove
+
+        def record_frame(screen, renderable):
+            if renderable is not None and not app._batch_count:
+                frames.append((tuple(parent.children), survivor.region))
+            return display(screen, renderable)
+
+        def remove_with_refresh():
+            # Expose the promotion frame before starting old-split teardown.
+            app.screen._on_timer_update()
+            return remove()
+
+        monkeypatch.setattr(app, "_display", record_frame)
+        monkeypatch.setattr(split, "remove", remove_with_refresh)
+        await pilot.press("alt+w")
+        await pilot.pause()
+        assert frames
+        for children, region in frames:
+            assert len(children) == 1
+            if children[0] is not split:
+                assert children[0] is survivor
+                assert region == parent.content_region
+        assert survivor.parent is parent
+        assert workspace.active is survivor
+        assert survivor.query_one(CommandInput).has_focus
+        assert not closing.is_attached
