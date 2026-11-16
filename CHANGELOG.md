@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-11-16
+
 - Require Anytext 9.2.1 for desktop and browser UI, with joined split dividers
   and transparent divider backgrounds that stay unchanged during interaction.
 
