@@ -279,6 +279,31 @@ async def test_async_functions_use_the_current_execution_context():
     assert (await execute(session, 'await greet("again")'))[1] == ["again"]
 
 
+async def test_expression_display_and_checkpoints_respect_python_scopes():
+    session = Session()
+    source = """class Values:
+    items = []
+    for i in range(2):
+        items.append(i)
+
+def doubled():
+    result = []
+    for value in Values.items:
+        result.append(value * 2)
+    return result
+
+async def report():
+    for value in doubled():
+        value + 0
+        echo {value}
+
+await report()
+"""
+    result, output, errors = await execute(session, source)
+    assert result.status == 0 and not errors
+    assert output == [0, "0", 2, "2"]
+
+
 @pytest.mark.parametrize(
     "source, complete",
     [
