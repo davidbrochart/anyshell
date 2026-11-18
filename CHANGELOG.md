@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 — 2026-11-18
+
 - Add cooperative job suspension with `kill -STOP` / `kill -CONT`, `fg`, `bg`,
   and Ctrl+Z. Preserve suspended pipelines and scripts, and pause `sleep`'s
   remaining duration. Custom commands can use `ctx.checkpoint()` and `ctx.sleep()`.
