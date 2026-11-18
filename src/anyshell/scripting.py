@@ -275,7 +275,9 @@ def _python_end(source: str, *, header: bool = False) -> int:
     return len(source)
 
 
-class _Bindings(ast.NodeVisitor):
+class _ValidateBindings(ast.NodeVisitor):
+    """Reject bindings to command and internal names, without changing the tree."""
+
     def __init__(self, commands):
         self.commands = commands
 
@@ -337,10 +339,11 @@ def _runtime_call(method, *args, **kwargs):
     )
 
 
-class _Lower(ast.NodeTransformer):
+class _RewriteCommands(ast.NodeTransformer):
+    """Replace shell placeholders with awaited runtime calls and their arguments."""
+
     def __init__(self, calls):
         self.calls = calls
-        self.async_context = True
 
     def visit_Call(self, node):
         if isinstance(node.func, ast.Name) and node.func.id in self.calls:
@@ -361,6 +364,37 @@ class _Lower(ast.NodeTransformer):
             )
         return self.generic_visit(node)
 
+
+class _AsyncScopeTransformer(ast.NodeTransformer):
+    """Track which statement scopes allow us to inject await expressions."""
+
+    def __init__(self):
+        self.async_context = True
+
+    def visit_FunctionDef(self, node):
+        previous = self.async_context
+        self.async_context = isinstance(node, ast.AsyncFunctionDef)
+        node = self.generic_visit(node)
+        self.async_context = previous
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        previous = self.async_context
+        self.async_context = False
+        node = self.generic_visit(node)
+        self.async_context = previous
+        return node
+
+
+class _DisplayExpressions(_AsyncScopeTransformer):
+    """Display Python expression results while leaving shell output to commands."""
+
+    def __init__(self, calls):
+        super().__init__()
+        self.calls = calls
+
     def visit_Expr(self, node):
         generated = (
             isinstance(node.value, ast.Call)
@@ -379,6 +413,10 @@ class _Lower(ast.NodeTransformer):
             value = _runtime_call("show", self.visit(node.value))
         return ast.copy_location(ast.Expr(value=value), node)
 
+
+class _InsertLoopCheckpoints(_AsyncScopeTransformer):
+    """Keep Python loops cancellable and suspendable in async statement scopes."""
+
     def visit_For(self, node):
         node = self.generic_visit(node)
         if self.async_context:
@@ -388,22 +426,6 @@ class _Lower(ast.NodeTransformer):
 
     visit_While = visit_For
     visit_AsyncFor = visit_For
-
-    def visit_FunctionDef(self, node):
-        previous = self.async_context
-        self.async_context = isinstance(node, ast.AsyncFunctionDef)
-        node = self.generic_visit(node)
-        self.async_context = previous
-        return node
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-
-    def visit_ClassDef(self, node):
-        previous = self.async_context
-        self.async_context = False
-        node = self.generic_visit(node)
-        self.async_context = previous
-        return node
 
 
 def compile_script(
@@ -526,8 +548,12 @@ def compile_script(
             pieces.append(";" if source[index] == "&" else source[index])
             index += 1
     tree = ast.parse("".join(pieces), filename="<anyshell>")
-    tree = _Lower(calls).visit(tree)
-    _Bindings(commands).visit(tree)
+    # Identify user expressions before lowering shell placeholders or injecting
+    # checkpoints, so generated runtime statements aren't displayed themselves.
+    tree = _DisplayExpressions(calls).visit(tree)
+    tree = _RewriteCommands(calls).visit(tree)
+    tree = _InsertLoopCheckpoints().visit(tree)
+    _ValidateBindings(commands).visit(tree)
     ast.fix_missing_locations(tree)
     code = compile(tree, "<anyshell>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
     return Script(code, simple, compound)
