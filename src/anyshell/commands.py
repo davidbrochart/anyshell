@@ -17,7 +17,15 @@ from typing import Annotated, Literal
 import anyio
 from cyclopts import Parameter
 
-from .engine import Command, Context, EditRequest, Event, PageRequest, ShellError
+from .engine import (
+    Command,
+    Context,
+    EditRequest,
+    Event,
+    PageRequest,
+    ShellError,
+    _CommandStatus,
+)
 from .filesystem import FileHandle, format_filesystem_error
 
 BUILTINS: list[Command] = []
@@ -580,19 +588,19 @@ async def exit(status: int | None = None, *, ctx: Context):
 
 
 @builtin("sleep", "Wait asynchronously; Ctrl+C cancels.")
-async def sleep(seconds: float):
+async def sleep(seconds: float, *, ctx: Context):
     if not math.isfinite(seconds) or seconds < 0:
         raise ShellError("seconds must be finite and nonnegative")
-    await anyio.sleep(seconds)
+    await ctx.sleep(seconds)
 
 
-@builtin("jobs", "List running background jobs.")
+@builtin("jobs", "List running and stopped background jobs.")
 async def jobs(*, ctx: Context, stdout):
     for job in list(ctx.session.jobs.values()):
         if job.result is not None:
             ctx.session.jobs.pop(job.id, None)
             continue
-        await stdout.send(f"[{job.id}] running  {job.source}")
+        await stdout.send(f"[{job.id}] {job.state}  {job.source}")
 
 
 @builtin("wait", "Wait for one or all background jobs.", standalone=True)
@@ -602,8 +610,43 @@ async def wait(job: int | None = None, *, ctx: Context):
         raise ShellError(f"background job exited with status {status}")
 
 
-@builtin("kill", "Cancel a background job.", standalone=True)
-async def kill(job: int, *, ctx: Context):
+@builtin("kill", "Cancel, stop, or resume a job.", standalone=True)
+async def kill(
+    job: int,
+    *,
+    stop: Annotated[bool, Parameter(name="-STOP")] = False,
+    cont: Annotated[bool, Parameter(name="-CONT")] = False,
+    ctx: Context,
+):
+    if stop and cont:
+        raise ShellError("choose either -STOP or -CONT")
     entry = ctx.session.get_job(job)
-    if entry.scope is not None:
+    if entry.result is not None:
+        raise ShellError(f"job has finished: {job}")
+    if stop:
+        entry.stop()
+        if not entry.foreground:
+            await ctx.emit(Event("job", entry))
+    elif cont:
+        entry.resume()
+        await ctx.emit(Event("job", entry))
+    elif entry.scope is not None:
         entry.scope.cancel()
+
+
+@builtin("bg", "Resume a stopped job in the background.", standalone=True)
+async def bg(job: int | None = None, *, ctx: Context):
+    entry = ctx.session.select_job(job, stopped_only=True)
+    entry.resume()
+    await ctx.emit(Event("job", entry))
+
+
+@builtin(
+    "fg", "Bring a job to the foreground, resuming it if stopped.", standalone=True
+)
+async def fg(job: int | None = None, *, ctx: Context):
+    if ctx.session._control is not None and not ctx.session._control.foreground:
+        raise ShellError("fg cannot run in the background")
+    result = await ctx.session.foreground_job(job, ctx.emit)
+    if result.status:
+        raise _CommandStatus(result.status)

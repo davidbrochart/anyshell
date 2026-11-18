@@ -44,10 +44,7 @@ def main() -> None:
             nonlocal long_header
             if event.kind == "job":
                 job = event.value
-                state = (
-                    "running" if job.result is None else f"done ({job.result.status})"
-                )
-                print(f"[{job.id}] {state}  {job.source}", file=sys.stderr)
+                print(f"[{job.id}] {job.state}  {job.source}", file=sys.stderr)
             if event.kind in {"output", "error"}:
                 if event.kind == "output" and is_long_file_record(event.value):
                     if not long_header:

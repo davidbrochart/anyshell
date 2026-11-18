@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add cooperative job suspension with `kill -STOP` / `kill -CONT`, `fg`, `bg`,
+  and Ctrl+Z. Preserve suspended pipelines and scripts, and pause `sleep`'s
+  remaining duration. Custom commands can use `ctx.checkpoint()` and `ctx.sleep()`.
+
+- Add session-local Python variables, `for`/`while` loops, and `if` statements
+  around shell commands, with `{...}` argument expressions and structured output
+  capture through assignments. Reserve command names against Python bindings,
+  keep loops cancellable, and indent multiline blocks in the prompt.
+
 ## 0.4.0 — 2026-11-16
 
 - Require Anytext 9.2.1 for desktop and browser UI, with joined split dividers
