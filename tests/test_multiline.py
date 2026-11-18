@@ -2,10 +2,12 @@
 
 import anyio
 import pytest
+from anytext.scrollbar import ScrollBar
+from rich.cells import cell_len
 
 from anyshell import MemoryFileSystem, Session, ShellError
 from anyshell.engine import is_complete, parse_commands
-from anyshell.frontend import CommandInput, Shell, ShellApp
+from anyshell.frontend import CommandInput, Shell, ShellApp, Transcript
 
 
 async def execute(session, source):
@@ -187,3 +189,104 @@ async def test_semicolon_cancellation_stops_remaining_commands():
             session.cancel()
     assert session.last_status == 130
     assert not [event for event in events if event.kind == "output"]
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+@pytest.mark.parametrize("scrollback", [False, True])
+async def test_block_continuation_keeps_header_visible_in_every_frame(
+    monkeypatch, prompt_position, scrollback
+):
+    frames = []
+    original = CommandInput.render_lines
+
+    def render_lines(editor, crop):
+        strips = original(editor, crop)
+        if editor.value == "if True:\n    ":
+            frames.append((editor.size.height, editor.scroll_y))
+        return strips
+
+    monkeypatch.setattr(CommandInput, "render_lines", render_lines)
+    session = Session()
+    app = ShellApp(session, prompt_position=prompt_position)
+    async with app.run_test(size=(60, 12)) as pilot:
+        editor = app.query_one(CommandInput)
+        if scrollback:
+            editor.value = "for i in range(40): echo {i}"
+            await pilot.press("enter")
+            with anyio.fail_after(5):
+                while app.query_one(Shell)._busy:
+                    await anyio.sleep(0.01)
+        editor.value = "if True:"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert editor.value == "if True:\n    "
+        assert frames
+        assert all(height == 2 and scroll_y == 0 for height, scroll_y in frames)
+        assert editor.has_focus
+        assert not session.running
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_growing_editor_does_not_paint_scrollbar(monkeypatch, prompt_position):
+    scrollbar_frames = []
+    original = ScrollBar.render_lines
+
+    def render_lines(scrollbar, crop):
+        if isinstance(scrollbar.parent, CommandInput) and crop.width:
+            scrollbar_frames.append(crop)
+        return original(scrollbar, crop)
+
+    monkeypatch.setattr(ScrollBar, "render_lines", render_lines)
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test(size=(60, 20)) as pilot:
+        editor = app.query_one(CommandInput)
+        editor.value = "if True:"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not scrollbar_frames
+
+        # Hiding the scrollbar must still allow cursor navigation beyond the
+        # editor's eight visible rows.
+        for _ in range(10):
+            await pilot.press("shift+enter")
+        await pilot.pause()
+        assert editor.size.height == 8
+        assert editor.scroll_y > 0
+        await pilot.press(*(["up"] * 11))
+        await pilot.pause()
+        assert editor.cursor_location[0] == 0
+        assert editor.scroll_y == 0
+        assert not scrollbar_frames
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+@pytest.mark.parametrize("cwd", ["/", "/目录"])
+async def test_submitted_block_keeps_indentation_relative_to_prompt(
+    prompt_position, cwd
+):
+    fs = MemoryFileSystem()
+    if cwd != "/":
+        fs.mkdir(cwd)
+    session = Session(fs)
+    session.cwd = cwd
+    app = ShellApp(session, prompt_position=prompt_position)
+    source = "if True:\n    if True:\n        echo hello"
+    async with app.run_test(size=(80, 20)) as pilot:
+        editor = app.query_one(CommandInput)
+        editor.value = source
+        await pilot.press("ctrl+enter")
+        with anyio.fail_after(5):
+            while app.query_one(Shell)._busy:
+                await anyio.sleep(0.01)
+        await pilot.pause()
+        prefix = f"{cwd} ❯ "
+        padding = " " * cell_len(prefix)
+        lines = [line.text.rstrip() for line in app.query_one(Transcript).lines]
+        assert lines[:3] == [
+            prefix + "if True:",
+            padding + "    if True:",
+            padding + "        echo hello",
+        ]
+        assert session.history == [source]

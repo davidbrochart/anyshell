@@ -30,6 +30,7 @@ from .presentation import (
     is_long_file_record,
     long_file_cells,
 )
+from .scripting import continuation_indent
 
 
 class CompletionMenu(OptionList, can_focus=False):
@@ -55,6 +56,7 @@ class CommandInput(TextArea):
         Binding("tab", "complete", show=False),
         Binding("escape", "dismiss_completion", show=False),
         Binding("ctrl+c", "cancel_command", show=False),
+        Binding("ctrl+z", "suspend_command", show=False),
         Binding("ctrl+r", "search_history", show=False),
     ]
 
@@ -74,6 +76,8 @@ class CommandInput(TextArea):
             event.prevent_default()
             if event.key == "ctrl+c":
                 self.shell.cancel()
+            elif event.key == "ctrl+z":
+                self.shell.session.suspend()
             return
         if self.shell.history_search_open:
             if event.key in {
@@ -137,6 +141,14 @@ class CommandInput(TextArea):
                 2 if self.shell.prompt_position == "bottom" else 0
             )
 
+    def edit(self, edit):
+        # Moving the cursor onto a new line scrolls TextArea before Changed
+        # is handled. Grow with the edit so that short-lived scroll isn't painted.
+        with self.app.batch_update():
+            result = super().edit(edit)
+            self.resize_editor()
+        return result
+
     def on_resize(self) -> None:
         self.call_after_refresh(self.resize_editor)
 
@@ -185,13 +197,15 @@ class CommandInput(TextArea):
         if self.shell.completion_open:
             self.shell.accept_completion()
         elif not self.shell._busy:
-            if is_complete(self.value):
+            if is_complete(self.value, self.shell.session.commands):
                 self.action_force_submit()
             else:
                 self.action_newline()
 
     def action_newline(self) -> None:
-        self.replace("\n", *self.selection, maintain_selection_offset=False)
+        before = self.value[: self.cursor_position]
+        indent = continuation_indent(before, self.shell.session.commands)
+        self.replace("\n" + indent, *self.selection, maintain_selection_offset=False)
 
     def action_force_submit(self) -> None:
         self.post_message(self.Submitted(self, self.value))
@@ -199,6 +213,9 @@ class CommandInput(TextArea):
     def action_cancel_command(self) -> None:
         self.shell.dismiss_completion()
         self.shell.cancel()
+
+    def action_suspend_command(self) -> None:
+        self.shell.session.suspend()
 
 
 class RunningCursor(TextArea):
@@ -238,6 +255,8 @@ class RunningCursor(TextArea):
         event.prevent_default()
         if event.key == "ctrl+c":
             self.query_ancestor(Shell).cancel()
+        elif event.key == "ctrl+z":
+            self.query_ancestor(Shell).session.suspend()
 
 
 class ShellScroll(VerticalScroll, can_focus=False):
@@ -356,6 +375,7 @@ class Shell(Vertical, can_focus=True):
     Shell #prompt { width: auto; padding: 1 0 0 1; margin-right: 1; }
     Shell CommandInput, Shell CommandInput:focus {
         width: 1fr; height: 1; border: none; padding: 0; margin: 1 0;
+        scrollbar-size-vertical: 0;
     }
     Shell CommandInput.-read-only:dark .text-area--cursor,
     Shell RunningCursor.-read-only:dark .text-area--cursor {
@@ -562,8 +582,10 @@ class Shell(Vertical, can_focus=True):
             event.input.read_only = True
         source = event.value
         event.input.value = ""
+        prefix = f"{self.session.cwd} ❯ "
+        displayed_source = source.replace("\n", "\n" + " " * cell_len(prefix))
         self.query_one(RichLog).write(
-            Text(f"{self.session.cwd} ❯ {source}", style="bold cyan")
+            Text(prefix + displayed_source, style="bold cyan")
         )
         self.run_worker(
             self._execute(source), name="shell-command", exit_on_error=False
@@ -675,10 +697,7 @@ class Shell(Vertical, can_focus=True):
             self._flush_file_rows()
             if event.kind == "job":
                 job = event.value
-                state = (
-                    "running" if job.result is None else f"done ({job.result.status})"
-                )
-                transcript.write(Text(f"[{job.id}] {state}  {job.source}"))
+                transcript.write(Text(f"[{job.id}] {job.state}  {job.source}"))
             if event.kind in {"output", "error"}:
                 transcript.write(
                     Text(

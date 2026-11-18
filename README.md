@@ -193,10 +193,66 @@ does not follow symbolic links and cannot remove the workspace root.
 `rmdir DIRECTORY...` removes empty directories and rejects files and nonempty
 directories; its completion suggests only directories.
 
-This is an initial shell language: quoting, multiline commands, and pipes are supported. Bash scripts,
-environment expansion, glob expansion, process execution, foregrounding or suspending jobs, and persistent history
-are not implemented. Commands are trusted Python
-code, not a sandbox. Browser filesystem changes are in-memory and reset on reload.
+The shell supports quoting, multiline commands, pipelines, and Python scripting.
+Bash scripts, environment expansion, glob expansion, process execution,
+and persistent history are not implemented.
+Scripts and commands are trusted Python code, not a sandbox. Browser filesystem
+changes are in-memory and reset on reload.
+
+## Python scripting
+
+Use Python assignments and control flow around ordinary shell commands:
+
+```python
+directory = "docs"
+names = ["a.txt", "b b.txt"]
+
+for name in names:
+    data = cat {f"{directory}/{name}"}
+    if data:
+        echo {data[0].upper()}
+```
+
+Variables persist within their session. A Python expression inside `{...}` is
+converted to one command argument, preserving spaces and treating shell operators
+in the result as literal text. Expressions also work inside double quotes;
+single quotes or escaped braces preserve literal braces. Python handles nested
+expressions, f-strings, and dictionary literals inside the braces. Other command
+words remain literal, so use `echo {name}` to read a variable.
+
+An assignment with a command on the right captures its output as a **list of
+Python values**, including an empty or single-item list. Captured output is not
+printed. Structured records remain dictionaries rather than formatted text:
+
+```python
+entries = ls docs | where type file
+for entry in entries:
+    echo {entry["name"]}
+```
+
+A failed capture raises an error and leaves the assignment target unchanged.
+Normal Python assignments such as `name = "ls"` retain their Python meaning.
+Entering a variable name or Python expression displays its value.
+
+Registered command names are reserved: `ls = []`, `for ls in entries:`, and
+imports or definitions that bind `ls` are errors. Registering a command also
+fails if a session variable already uses its name. Python variables can be
+inspected through the `Session.variables` snapshot in the embedding API.
+
+`for`, `while`, `if`/`elif`/`else`, `break`, `continue`, and loop `else` clauses
+follow Python semantics. Shell loops yield to the event loop, including loops
+whose bodies contain only Python statements, so Ctrl+C can cancel them. Existing
+pipelines, redirections, and background commands work in loop bodies. Background
+arguments are evaluated at launch, and commands launched with `&` inherit a shallow
+copy of the session's variable bindings. A suspended foreground script retains
+its session variables, including when resumed with `bg`. Background command output
+cannot be captured into an assignment.
+
+In the interactive editor, Enter indents unfinished blocks. Finish a multiline
+block with a blank line, or use Ctrl+Enter to submit it explicitly. A one-line
+block such as `for i in range(3): echo {i}` can be submitted directly. Commands
+inside a script are prepared when reached, after their expressions are evaluated;
+ordinary shell-only sequences retain their existing upfront validation.
 
 ## Background commands
 
@@ -206,17 +262,33 @@ Append `&` to run a command or pipeline in the background and return to the prom
 sleep 30 &
 cat notes.txt | grep Python &
 jobs
-wait 1
+kill -STOP 1
+bg 1
+fg 1
 kill 1
 ```
 
-`jobs` lists only running background jobs and their IDs. `wait ID` waits for a job; `wait` waits for all
-jobs still in the job list. `kill ID` cancels a job cooperatively. Ctrl+C cancels the
+`jobs` lists running and stopped background jobs and their IDs. `wait ID` waits
+for a job; `wait` waits for all jobs still in the job list, including stopped jobs.
+`kill ID` cancels a job cooperatively, even when stopped. `kill -STOP ID` suspends
+it and `kill -CONT ID` resumes it in the background. `bg ID` resumes a stopped
+job; `fg ID` brings a job to the foreground, resuming it if needed. Without an
+ID, `bg` selects the most recent stopped job and `fg` the most recent unfinished
+job. IDs are plain numbers, without `%`.
+
+Ctrl+Z suspends the foreground command or script and returns the prompt. Its
+pipeline and remaining script continue when resumed. Ctrl+C cancels the
 foreground command (including `wait`), leaving background jobs running. Job
 output appears in the transcript, with launch and completion notifications.
 Completed jobs are removed from the job list when `jobs` is entered, without
 listing them again.
 Job IDs are not reused during the session.
+
+Suspension is cooperative: command input/output and Python loop checkpoints
+wait while stopped. `sleep` preserves its remaining duration, excluding time
+spent stopped. Custom commands should use `await ctx.checkpoint()` between
+units of work and `await ctx.sleep(seconds)` for pauses; arbitrary Python or
+third-party waits cannot be forcibly suspended.
 
 An unquoted `&` also separates commands: `sleep 30 & echo ready`. Quote or escape
 it to pass a literal ampersand. `&&` is not supported. Each job inherits the
@@ -236,8 +308,11 @@ async with session.background():
 ```
 
 Leaving this context cancels unfinished jobs. `Session.jobs` maps IDs to `Job`
-objects with `source`, `result`, and `done`; launch and completion events have
-kind `job`. Background completion does not change `Session.last_status`.
+objects with `source`, `state`, `stopped`, `result`, and `done`; launch, state
+change, and completion events have kind `job`. `Session.suspend()` stops the
+foreground job. Background completion does not change `Session.last_status`.
+Job control requires the `session.background()` lifetime. Foreground suspension
+returns status 148; cancellation returns 130.
 
 ## Find files
 

@@ -98,6 +98,24 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
       "session.jobs[1].done.is_set() and not browser_app.query_one('Shell')._busy"));
     assert.equal(await python("session.jobs[1].result.cancelled"), true);
 
+    await page.keyboard.type('sleep 30');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython('session.running'));
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "not browser_app.query_one('Shell')._busy and any(job.stopped for job in session.jobs.values())"));
+    await page.keyboard.type('bg');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "not browser_app.query_one('Shell')._busy and not any(job.stopped for job in session.jobs.values())"));
+    await page.keyboard.type('fg');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      'session._foreground_job is not None and session._foreground_job.id != 0'));
+    await page.keyboard.press('Control+c');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "not browser_app.query_one('Shell')._busy and session.last_status == 130"));
+
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.keyboard.type('echo select me');
     await page.keyboard.press('Enter');
@@ -162,6 +180,20 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
       await page.waitForFunction(source => window.anyshellDemo.pyodide.runPython(
         `session.history[-1] == ${JSON.stringify(source)} and not browser_app.query_one('Shell')._busy`), source);
     }
+    await command('directory = "notes"');
+    await command('data = cat {f"{directory}/fruits.txt"} | grep ^a');
+    assert.equal(await python("len(session.variables['data']) == 2 and all(line.startswith('a') for line in session.variables['data'])"), true);
+    await command('for name in ["one", "two"]: echo {name.upper()}');
+    assert.equal(await python("[e.value for e in browser_app.query_one('Shell').output if e.kind == 'output'][-2:] == ['ONE', 'TWO']"), true);
+    await command('ls = []');
+    assert.equal(await python("session.last_status == 1 and 'ls' not in session.variables"), true);
+    await command('script_counter = 0');
+    await page.keyboard.type('while script_counter < 1000000: script_counter += 1');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython('session.running'));
+    await page.keyboard.press('Control+c');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("not session.running and not browser_app.query_one('Shell')._busy and session.last_status == 130"));
+    assert.equal(await python("session.variables['script_counter'] < 1000000"), true);
     await page.keyboard.type('echo first');
     await page.keyboard.press('Shift+Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("browser_app.query_one('CommandInput').value == 'echo first\\n'"));
