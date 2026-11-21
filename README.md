@@ -54,6 +54,8 @@ and jobs. Click another pane to focus it. These pane shortcuts belong to
 `ShellApp`; an embedded `Shell` keeps its existing shortcuts.
 
 Enter `exit` to close the current pane, or quit the app when it is the last pane.
+Ctrl+D at an empty prompt does the same. With text in the prompt, Ctrl+D deletes
+the character under the cursor.
 `exit STATUS` supplies an exit status (otherwise the previous command's status is
 used). Later commands on the same line are skipped. In headless mode, `exit`
 ends the session and cancels its background jobs. Embedded hosts can handle the
