@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Close the current pane with Ctrl+D at an empty prompt, quitting the app when
+  it is the last pane. With nonempty input, Ctrl+D deletes the next character.
+
 ## 0.5.0 — 2026-11-18
 
 - Add cooperative job suspension with `kill -STOP` / `kill -CONT`, `fg`, `bg`,

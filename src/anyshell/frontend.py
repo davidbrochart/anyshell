@@ -56,6 +56,7 @@ class CommandInput(TextArea):
         Binding("tab", "complete", show=False),
         Binding("escape", "dismiss_completion", show=False),
         Binding("ctrl+c", "cancel_command", show=False),
+        Binding("ctrl+d", "end_of_input", show=False),
         Binding("ctrl+z", "suspend_command", show=False),
         Binding("ctrl+r", "search_history", show=False),
     ]
@@ -216,6 +217,12 @@ class CommandInput(TextArea):
 
     def action_suspend_command(self) -> None:
         self.shell.session.suspend()
+
+    def action_end_of_input(self) -> None:
+        if not self.value:
+            self.post_message(self.Submitted(self, "exit"))
+        else:
+            self.action_delete_right()
 
 
 class RunningCursor(TextArea):

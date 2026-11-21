@@ -69,7 +69,8 @@ async def test_background_exit_does_not_close_parent():
 
 
 @pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
-async def test_exit_closes_current_pane_and_its_jobs(prompt_position):
+@pytest.mark.parametrize("exit_key", ["enter", "ctrl+d"])
+async def test_exit_closes_current_pane_and_its_jobs(prompt_position, exit_key):
     app = ShellApp(prompt_position=prompt_position)
     async with app.run_test() as pilot:
         workspace = app.query_one(ShellWorkspace)
@@ -82,8 +83,9 @@ async def test_exit_closes_current_pane_and_its_jobs(prompt_position):
             while not closing.session.jobs or closing._busy:
                 await anyio.sleep(0.01)
         job = closing.session.jobs[1]
-        closing.query_one(CommandInput).value = "exit"
-        await pilot.press("enter")
+        if exit_key == "enter":
+            closing.query_one(CommandInput).value = "exit"
+        await pilot.press(exit_key)
         with anyio.fail_after(5):
             while closing.is_attached or not job.done.is_set():
                 await anyio.sleep(0.01)
@@ -95,15 +97,33 @@ async def test_exit_closes_current_pane_and_its_jobs(prompt_position):
 
 
 @pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
-async def test_exit_last_pane_quits_app(prompt_position):
+@pytest.mark.parametrize("exit_key", ["enter", "ctrl+d"])
+async def test_exit_last_pane_quits_app(prompt_position, exit_key):
     app = ShellApp(prompt_position=prompt_position)
     async with app.run_test() as pilot:
-        app.query_one(CommandInput).value = "exit 17"
-        await pilot.press("enter")
+        app.query_one(Shell).session.last_status = 17
+        if exit_key == "enter":
+            app.query_one(CommandInput).value = "exit 17"
+        await pilot.press(exit_key)
         with anyio.fail_after(5):
             while app.is_running:
                 await anyio.sleep(0.01)
     assert app.return_value == 17
+
+
+@pytest.mark.parametrize("prompt_position", ["inline", "bottom"])
+async def test_ctrl_d_preserves_nonempty_input(prompt_position):
+    app = ShellApp(prompt_position=prompt_position)
+    async with app.run_test() as pilot:
+        editor = app.query_one(CommandInput)
+        editor.value = "echo hello"
+        await pilot.press("ctrl+d")
+        assert editor.value == "echo hello"
+        editor.cursor_position = 5
+        await pilot.press("ctrl+d")
+        assert editor.value == "echo ello"
+        assert app.is_running
+        assert app.query_one(Shell).session.exit_status is None
 
 
 async def test_exit_message_closes_issuing_pane_without_stealing_focus():
