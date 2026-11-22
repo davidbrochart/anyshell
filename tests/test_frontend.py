@@ -241,8 +241,7 @@ async def test_long_listing_table_and_option_completion(prompt_position):
         await pilot.press("enter")
         await wait_until(lambda: not shell._busy)
         assert any(
-            e.kind == "output" and "--long" in str(e.value)
-            for e in shell.output
+            e.kind == "output" and "--long" in str(e.value) for e in shell.output
         )
         assert app.is_running
 
