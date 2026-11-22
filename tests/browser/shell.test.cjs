@@ -313,17 +313,19 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await command('find notes -maxdepth 0');
     assert.equal(await python("[e.value for e in browser_app.query_one('Shell').output if e.kind == 'output'][-1] == {'name': 'notes', 'path': 'notes', 'type': 'directory'}"), true);
     await command('ls --help');
-    assert.equal(await python("any(e.kind == 'output' and isinstance(e.value, str) and '--long' in e.value for e in browser_app.query_one('Shell').output)"), true);
+    assert.equal(await python("any(e.kind == 'output' and '--long' in str(e.value) for e in browser_app.query_one('Shell').output)"), true);
     await command('ls --bogus');
     assert.equal(await python('session.last_status'), 1);
     await command('clear');
     await command('ls -l');
-    assert.equal(await python("session.last_status == 0 and any(e.kind == 'output' and isinstance(e.value, dict) and e.value.get('name') == 'browser.txt' and e.value.get('size') == 14 and isinstance(e.value.get('modified'), float) for e in browser_app.query_one('Shell').output)"), true);
+    assert.equal(await python("session.last_status == 0 and any(e.kind == 'output' and type(e.value).__name__ == 'Table' for e in browser_app.query_one('Shell').output)"), true);
     assert.equal(await python("any('Modified (UTC)' in line.text for line in browser_app.query_one('RichLog').lines)"), true);
     await page.waitForFunction(() => {
       const buffer = window.anyshellDemo.terminal.buffer.active;
       return Array.from({length: buffer.length}, (_, i) => buffer.getLine(i)?.translateToString() || '').join('\n').includes('Modified (UTC)');
     });
+    await command('listing = ls -l');
+    assert.equal(await python("any(row.get('name') == 'browser.txt' and row.get('size') == 14 and isinstance(row.get('modified'), float) for row in session.variables['listing'])"), true);
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.screenshot({path: path.join(root, `.cache/browser-long-${promptPosition}.png`)});
     await python("session.filesystem.mkdir('/cursor-check'); [session.filesystem.write_text(f'/cursor-check/file-{i:03}.txt', '') for i in range(400)]");

@@ -67,9 +67,16 @@ async def test_listing_displays_columns_and_preserves_records(prompt_position):
         assert any("notes/" in line and "readme.txt" in line for line in lines)
         assert any("[red].txt" in line for line in lines)
         assert not any('"type":' in line for line in lines)
-        rows = [event.value for event in shell.output if event.kind == "output"]
-        assert {"name": "notes", "type": "directory"} in rows
-        assert {"name": "readme.txt", "type": "file"} in rows
+        from rich.columns import Columns
+
+        output = [event.value for event in shell.output if event.kind == "output"]
+        assert len(output) == 1
+        assert isinstance(output[0], Columns)
+        command_input.value = "data = ls"
+        await pilot.press("enter")
+        await wait_until(lambda: not shell._busy)
+        assert {"name": "notes", "type": "directory"} in session.variables["data"]
+        assert {"name": "readme.txt", "type": "file"} in session.variables["data"]
 
 
 async def test_inline_prompt_geometry_scrolling_and_clear():
@@ -218,16 +225,23 @@ async def test_long_listing_table_and_option_completion(prompt_position):
         text = "\n".join(line.text for line in app.query_one(RichLog).lines)
         assert "Bytes" in text and "Modified (UTC)" in text
         assert "notes/" in text and "readme.txt" in text
-        rows = [event.value for event in shell.output if event.kind == "output"]
-        file = next(row for row in rows if row["name"] == "readme.txt")
+        from rich.table import Table
+
+        output = [event.value for event in shell.output if event.kind == "output"]
+        assert len(output) == 1 and isinstance(output[0], Table)
+        command_input.value = "data = ls -l"
+        await pilot.press("enter")
+        await wait_until(lambda: not shell._busy)
+        file = next(
+            row for row in session.variables["data"] if row["name"] == "readme.txt"
+        )
         assert file["size"] == 5
         assert isinstance(file["modified"], float)
         command_input.value = "ls --help"
         await pilot.press("enter")
         await wait_until(lambda: not shell._busy)
         assert any(
-            e.kind == "output" and isinstance(e.value, str) and "--long" in e.value
-            for e in shell.output
+            e.kind == "output" and "--long" in str(e.value) for e in shell.output
         )
         assert app.is_running
 
@@ -354,7 +368,12 @@ async def test_help_fits_transcript_width_after_resize(prompt_position):
             editor.value = source
             await pilot.press("enter")
             await wait_until(lambda: not shell._busy)
-            lines = [e.value for e in shell.output if e.kind == "output"]
+            lines = [
+                line
+                for event in shell.output
+                if event.kind == "output"
+                for line in str(event.value).splitlines()
+            ]
             assert max(map(len, lines)) == available
             assert all(len(line) <= available for line in lines)
             assert transcript.scrollable_content_region.width == available

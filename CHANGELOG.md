@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Host command-provided interactive widgets in the current pane with
+  `ctx.open_view()`, restoring the prompt and releasing services on close.
+
+- Preserve Cyclopts help colors at the terminal while keeping help plain in
+  pipelines, assignments and file redirections, including nested command help.
+
+- Accept Cyclopts apps as commands, with nested subcommands, async callbacks,
+  captured help and version output, and subcommand/option completion.
+
+- Expose `stdout.is_terminal` so commands choose their own terminal presentation
+  while pipes, assignments and redirections retain raw output. Move ls's column
+  and table rendering into the command and support command-provided Rich layouts.
+
+- Discover external command registration hooks through the `anyshell.commands`
+  entry-point group at startup. Use `--disable NAME` to exclude plugins or the
+  repeatable `--plugin NAME` option to select specific plugins.
+
 - Close the current pane with Ctrl+D at an empty prompt, quitting the app when
   it is the last pane. With nonempty input, Ctrl+D deletes the next character.
 

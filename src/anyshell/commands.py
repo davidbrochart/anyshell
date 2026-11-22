@@ -49,12 +49,23 @@ def render(value) -> str:
 
 
 @builtin("help", "List commands or show a command's options.")
-async def help_command(command: str | None = None, *, ctx: Context, stdout):
+async def help_command(
+    command: str | None = None, *subcommands: str, ctx: Context, stdout
+):
     if command is not None:
         if command not in ctx.session.commands:
             raise ShellError(f"command not found: {command}")
+        if stdout.is_terminal:
+            await stdout.send(
+                ctx.session.commands[command].help_display(
+                    subcommands, width=ctx.output_width
+                )
+            )
+            return
         for line in (
-            ctx.session.commands[command].help_text(width=ctx.output_width).splitlines()
+            ctx.session.commands[command]
+            .help_text(subcommands, width=ctx.output_width)
+            .splitlines()
         ):
             await stdout.send(line)
     else:
@@ -93,20 +104,37 @@ async def ls(
     ctx: Context,
     stdout,
 ):
+    from .presentation import file_listing
+
+    rows = []
+
+    async def output(row):
+        if stdout.is_terminal:
+            rows.append(row)
+            if len(rows) >= 128:
+                await stdout.send(file_listing(rows, long=long))
+                rows.clear()
+        else:
+            await stdout.send(row)
+
     path = ctx.resolve(directory)
     if not ctx.fs.is_dir(path):
         metadata = ctx.fs.stat(path)  # Also validates existence for a plain listing.
         row = {"name": posixpath.basename(path), "type": "file"}
         if long:
             row.update(metadata)
-        await stdout.send(row)
+        await output(row)
+        if rows:
+            await stdout.send(file_listing(rows, long=long))
         return
     for row in ctx.fs.listdir(path):
         if not all and row["name"].startswith("."):
             continue
         if long:
             row = {**row, **ctx.fs.stat(ctx.resolve(directory + "/" + row["name"]))}
-        await stdout.send(row)
+        await output(row)
+    if rows:
+        await stdout.send(file_listing(rows, long=long))
 
 
 @builtin("find", "Walk directory trees and filter entries by name or type.")

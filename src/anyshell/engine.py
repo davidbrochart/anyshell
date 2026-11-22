@@ -7,7 +7,7 @@ import posixpath
 import re
 import shlex
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import ExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from inspect import BoundArguments, isawaitable
@@ -18,6 +18,7 @@ import anyio
 from cyclopts import App as ArgumentParser
 from cyclopts import CycloptsError, Parameter
 from rich.console import Console
+from rich.text import Text
 
 from . import scripting
 from .filesystem import (
@@ -35,7 +36,16 @@ class ShellError(Exception):
 @dataclass(frozen=True)
 class Event:
     kind: Literal[
-        "output", "error", "clear", "cwd", "status", "edit", "page", "job", "exit"
+        "output",
+        "error",
+        "clear",
+        "cwd",
+        "status",
+        "edit",
+        "page",
+        "view",
+        "job",
+        "exit",
     ]
     value: Any = None
 
@@ -62,6 +72,18 @@ Emitter = Callable[[Event], Awaitable[None]]
 
 
 @dataclass
+class ViewRequest:
+    """An interactive widget supplied by a command-owned async context manager.
+
+    open(host_app) owns services for the widget's lifetime. The widget exposes
+    an AnyIO closed event. Frontends mount it, wait for closure, then remove it.
+    """
+
+    open: Callable[[Any], AbstractAsyncContextManager[Any]]
+    handled: bool = False
+
+
+@dataclass
 class Context:
     session: Session
     emit: Emitter
@@ -73,6 +95,13 @@ class Context:
 
     def resolve(self, path: str) -> str:
         return resolve_path(self.session.cwd, path)
+
+    async def open_view(self, factory):
+        """Ask the frontend to host an interactive view and its services."""
+        request = ViewRequest(factory)
+        await self.emit(Event("view", request))
+        if not request.handled:
+            raise ShellError("interactive views require an Anytext frontend")
 
     async def checkpoint(self) -> None:
         """Yield to cancellation and wait while this command's job is stopped."""
@@ -94,16 +123,21 @@ class Command:
     """A typed Python command; ctx/context, stdin and stdout are injected by name.
 
     Injected parameters must be keyword-only. Other parameters are parsed by
-    Cyclopts, including Annotated option aliases and validators.
+    Cyclopts, including Annotated option aliases and validators. A Cyclopts App
+    can be supplied instead of a function to expose a complete command tree;
+    its injected parameters must use Parameter(parse=False).
     """
 
     name: str
     description: str
-    run: Callable[..., Any]
+    run: Callable[..., Any] | ArgumentParser
     standalone: bool = False
     _parser: ArgumentParser = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if isinstance(self.run, ArgumentParser):
+            object.__setattr__(self, "_parser", self.run)
+            return
         parser = ArgumentParser(
             name=self.name,
             help=self.description,
@@ -115,7 +149,13 @@ class Command:
 
     def prepare(self, arguments: list[str], *, width: int = 88) -> _Invocation:
         output = StringIO()
-        console = Console(file=output, width=width, color_system=None)
+        console = Console(
+            file=output,
+            width=width,
+            color_system="truecolor",
+            force_terminal=True,
+            no_color=False,
+        )
         try:
             callback, bound, ignored = self._parser.parse_args(
                 arguments,
@@ -141,19 +181,43 @@ class Command:
             callback == self._parser.help_print,
         )
 
-    def option_names(self) -> list[str]:
-        names = set(self._parser.help_flags)
-        for argument in self._parser.assemble_argument_collection():
-            if argument.parse and argument.show:
-                names.update(argument.names)
+    def option_names(self, arguments=()) -> list[str]:
+        _, apps, _ = self._parser.parse_commands(arguments)
+        app = apps[-1]
+        names = set(app.help_flags)
+        with self._parser.app_stack(apps):
+            if app.default_command is not None:
+                for argument in app.assemble_argument_collection():
+                    if argument.parse and argument.show:
+                        names.update(argument.names)
         return sorted(name for name in names if name.startswith("-"))
 
-    def help_text(self, *, width: int = 88) -> str:
+    def subcommand_names(self, arguments=()) -> list[str]:
+        _, apps, unused = self._parser.parse_commands(arguments)
+        if unused:
+            return []
+        app = apps[-1]
+        return sorted(
+            name for name in app if not name.startswith("-") and app[name].show
+        )
+
+    def help_text(self, arguments=(), *, width: int = 88) -> str:
+        return self.help_display(arguments, width=width).plain
+
+    def help_display(self, arguments=(), *, width: int = 88) -> Text:
+        """Capture Cyclopts' chosen help presentation without printing globally."""
         output = StringIO()
         self._parser.help_print(
-            console=Console(file=output, width=width, color_system=None)
+            arguments,
+            console=Console(
+                file=output,
+                width=width,
+                color_system="truecolor",
+                force_terminal=True,
+                no_color=False,
+            ),
         )
-        return output.getvalue().rstrip()
+        return Text.from_ansi(output.getvalue().rstrip())
 
 
 @dataclass
@@ -181,8 +245,13 @@ class _Invocation:
         if result is not None:
             await stdout.send(result)
         # Help uses a per-invocation console, never a global stdout redirect.
-        for line in self.help_output.getvalue().splitlines():
-            await stdout.send(line)
+        help_output = Text.from_ansi(self.help_output.getvalue())
+        if stdout.is_terminal and help_output:
+            for line in help_output.split("\n"):
+                await stdout.send(line)
+        else:
+            for line in help_output.plain.splitlines():
+                await stdout.send(line)
 
 
 @dataclass(frozen=True)
@@ -255,9 +324,10 @@ class Job:
 class _ControlledStream:
     """Pause before consuming input or producing output, including redirections."""
 
-    def __init__(self, stream, context):
+    def __init__(self, stream, context, *, is_terminal=False):
         self.stream = stream
         self.context = context
+        self.is_terminal = is_terminal
 
     def __getattr__(self, name):
         return getattr(self.stream, name)
@@ -509,10 +579,11 @@ class _RuntimeProxy:
 
 
 class _ScriptRuntime:
-    def __init__(self, session, emit, output_width):
+    def __init__(self, session, emit, output_width, is_terminal):
         self.session = session
         self.emit = emit
         self.output_width = output_width
+        self.is_terminal = is_terminal
 
     async def checkpoint(self):
         if self.session._control is not None:
@@ -552,7 +623,7 @@ class _ScriptRuntime:
                 captured.append(event.value)
             elif event.kind == "error":
                 errors.append(event.value)
-            elif event.kind in {"edit", "page", "clear"}:
+            elif event.kind in {"edit", "page", "view", "clear"}:
                 raise ShellError("interactive commands cannot be captured")
             else:
                 await self.emit(event)
@@ -564,6 +635,7 @@ class _ScriptRuntime:
                     commands,
                     self.emit,
                     self.output_width,
+                    self.is_terminal,
                 )
                 status = 0
             else:
@@ -571,6 +643,7 @@ class _ScriptRuntime:
                     commands,
                     collect if capture else self.emit,
                     output_width=self.output_width,
+                    is_terminal=self.is_terminal and not capture,
                 )
             self.session.last_status = status
             if self.session.exit_status is not None:
@@ -685,19 +758,21 @@ class Session:
 
         await self._owner._job_group.start(run)
 
-    async def _start_job(self, source, commands, emit, output_width):
+    async def _start_job(self, source, commands, emit, output_width, is_terminal):
         job = Job(0, source)
         child = self._child_session()
         child._control = job
         job.session = child
 
         async def output(event):
-            if event.kind in {"edit", "page", "clear"} and not job.foreground:
+            if event.kind in {"edit", "page", "view", "clear"} and not job.foreground:
                 raise ShellError("interactive commands cannot run in the background")
             await emit(event)
 
         async def pipeline():
-            status = await child._pipeline(commands, output, output_width=output_width)
+            status = await child._pipeline(
+                commands, output, output_width=output_width, is_terminal=is_terminal
+            )
             return Result(status)
 
         self._register_job(job)
@@ -791,8 +866,18 @@ class Session:
         return True
 
     async def execute(
-        self, source: str, emit: Emitter, *, output_width: int = 88
+        self,
+        source: str,
+        emit: Emitter,
+        *,
+        output_width: int = 88,
+        is_terminal: bool = False,
     ) -> Result:
+        """Execute source, optionally allowing terminal presentation.
+
+        Commands see stdout.is_terminal only on the final, unredirected stage
+        when is_terminal is true. Assignments always capture raw output.
+        """
         if self.exit_status is not None:
             raise ShellError("this session has exited")
         if output_width < 1:
@@ -812,7 +897,12 @@ class Session:
                 try:
                     await self._launch(
                         job,
-                        lambda: child._execute(source, emit, output_width=output_width),
+                        lambda: child._execute(
+                            source,
+                            emit,
+                            output_width=output_width,
+                            is_terminal=is_terminal,
+                        ),
                         emit,
                     )
                     result = await self._wait_foreground(job, emit)
@@ -826,18 +916,22 @@ class Session:
                     raise
                 finally:
                     self._foreground_job = None
-            return await self._execute(source, emit, output_width=output_width)
+            return await self._execute(
+                source, emit, output_width=output_width, is_terminal=is_terminal
+            )
         finally:
             self._executing = False
 
     async def _execute(
-        self, source: str, emit: Emitter, *, output_width: int
+        self, source: str, emit: Emitter, *, output_width: int, is_terminal: bool
     ) -> Result:
         if not self.history or self.history[-1] != source:
             self.history.append(source)
         status = 0
         previous_cwd = self.cwd
-        runtime_token = _script_runtime.set(_ScriptRuntime(self, emit, output_width))
+        runtime_token = _script_runtime.set(
+            _ScriptRuntime(self, emit, output_width, is_terminal)
+        )
         with anyio.CancelScope() as scope:
             self._scope = scope
             try:
@@ -849,12 +943,15 @@ class Session:
                     for commands, text, background in pipelines:
                         if background:
                             await self._start_job(
-                                text.strip(), commands, emit, output_width
+                                text.strip(), commands, emit, output_width, is_terminal
                             )
                             status = 0
                         else:
                             status = await self._pipeline(
-                                commands, emit, output_width=output_width
+                                commands,
+                                emit,
+                                output_width=output_width,
+                                is_terminal=is_terminal,
                             )
                         self.last_status = status
                         if self.exit_status is not None:
@@ -913,9 +1010,21 @@ class Session:
         return pipelines
 
     async def _pipeline(
-        self, commands, emit: Emitter, *, output_width: int = 88
+        self,
+        commands,
+        emit: Emitter,
+        *,
+        output_width: int = 88,
+        is_terminal: bool = False,
     ) -> int:
-        context = Context(self, emit, output_width=output_width)
+        async def emit_context(event):
+            if event.kind == "view" and (
+                len(commands) > 1 or any(command.redirections for command in commands)
+            ):
+                raise ShellError("interactive views cannot be piped or redirected")
+            await emit(event)
+
+        context = Context(self, emit_context, output_width=output_width)
         await context.checkpoint()
         streams = [
             anyio.create_memory_object_stream[Any](16) for _ in range(len(commands) + 1)
@@ -950,7 +1059,15 @@ class Session:
                         await commands[index].run(
                             context,
                             _ControlledStream(stdin, context),
-                            _ControlledStream(stdout, context),
+                            _ControlledStream(
+                                stdout,
+                                context,
+                                is_terminal=(
+                                    is_terminal
+                                    and index == len(commands) - 1
+                                    and stdout is send
+                                ),
+                            ),
                         )
                 except _CommandStatus as error:
                     statuses[index] = error.status
@@ -1000,9 +1117,18 @@ class Session:
         if prefix.startswith("-") and words and words[0] in self.commands:
             return [
                 source[:start] + option
-                for option in self.commands[words[0]].option_names()
+                for option in self.commands[words[0]].option_names(words[1:-1])
                 if option.startswith(prefix)
             ]
+        if words and words[0] in self.commands:
+            arguments = words[1:] if segment.endswith(" ") else words[1:-1]
+            matches = [
+                source[:start] + name + " "
+                for name in self.commands[words[0]].subcommand_names(arguments)
+                if name.startswith(prefix)
+            ]
+            if matches:
+                return matches
         directory, name = posixpath.split(prefix)
         try:
             rows = self.filesystem.listdir(resolve_path(self.cwd, directory or "."))
