@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 import anyio
 import pytest
 from anytext.widget import Widget
-from anytext.widgets import Footer
+from anytext.widgets import Button, Footer
 from anytext.widgets._footer import FooterKey
 
 from anyshell import Command, Session
@@ -90,6 +90,36 @@ async def test_view_startup_failure_keeps_shell_available():
         assert session.last_status == 1
         assert editor.has_focus
         assert lifecycle == ["start", "stop"]
+
+
+async def test_closing_view_restores_prompt_with_other_focusable_widgets(monkeypatch):
+    session = Session()
+    register(session, [])
+
+    class Host(ShellApp):
+        def compose(self):
+            yield from super().compose()
+            yield Button("Host control")
+
+    app = Host(session)
+    async with app.run_test() as pilot:
+        editor = app.query_one(CommandInput)
+        editor.value = "demo"
+        await pilot.press("enter")
+        await wait_for(lambda: bool(app.query(DemoView)))
+        await wait_for(lambda: app.query_one(DemoView).has_focus)
+        reset_focus = app.screen._reset_focus
+
+        def focus_host_on_removal(widget, avoiding=None):
+            if isinstance(widget, DemoView):
+                app.screen.set_focus(app.query_one(Button))
+            else:
+                reset_focus(widget, avoiding)
+
+        monkeypatch.setattr(app.screen, "_reset_focus", focus_host_on_removal)
+        await pilot.press("q")
+        await wait_for(lambda: not app.query_one(Shell)._busy)
+        await wait_for(lambda: editor.has_focus)
 
 
 @pytest.mark.parametrize("view_footer", [False, True])

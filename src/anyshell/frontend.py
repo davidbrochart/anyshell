@@ -642,6 +642,10 @@ class Shell(Vertical, can_focus=True):
             restore_focus = self.has_focus_within or (
                 owned_focus and self.app.focused is None
             )
+            if restore_focus:
+                # Removing a focused view can otherwise move focus to an
+                # unrelated widget while the prompt is still hidden.
+                self.app.set_focus(None)
             with anyio.CancelScope(shield=True):
                 await view.remove()
             terminal.disabled = False
