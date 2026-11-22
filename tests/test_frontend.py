@@ -369,7 +369,12 @@ async def test_help_fits_transcript_width_after_resize(prompt_position):
             editor.value = source
             await pilot.press("enter")
             await wait_until(lambda: not shell._busy)
-            lines = [e.value for e in shell.output if e.kind == "output"]
+            lines = [
+                line
+                for event in shell.output
+                if event.kind == "output"
+                for line in str(event.value).splitlines()
+            ]
             assert max(map(len, lines)) == available
             assert all(len(line) <= available for line in lines)
             assert transcript.scrollable_content_region.width == available
