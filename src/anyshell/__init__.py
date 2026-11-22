@@ -10,6 +10,7 @@ from .engine import (
     Result,
     Session,
     ShellError,
+    ViewRequest,
 )
 from .filesystem import FileHandle, FileSystem, LocalFileSystem, MemoryFileSystem
 
@@ -27,4 +28,5 @@ __all__ = [
     "Result",
     "Session",
     "ShellError",
+    "ViewRequest",
 ]

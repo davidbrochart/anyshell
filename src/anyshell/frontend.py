@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import AsyncExitStack
 from os.path import commonprefix
 from typing import Literal
 
@@ -13,23 +14,16 @@ from anytext.binding import Binding
 from anytext.containers import Horizontal, HorizontalScroll, Vertical, VerticalScroll
 from anytext.message import Message
 from anytext.widgets import Footer, OptionList, RichLog, Static, TextArea
+from anytext.widgets._footer import FooterKey
 from rich.cells import cell_len
-from rich.columns import Columns
-from rich.table import Table
+from rich.protocol import is_renderable
 from rich.text import Text
 
 from .editor import FileEditor
 from .engine import Event, Session, is_complete
 from .log import SelectableLog
 from .pager import Pager
-from .presentation import (
-    LONG_FILE_HEADERS,
-    file_name,
-    format_value,
-    is_file_record,
-    is_long_file_record,
-    long_file_cells,
-)
+from .presentation import format_value
 from .scripting import continuation_indent
 
 
@@ -426,7 +420,7 @@ class Shell(Vertical, can_focus=True):
         self._draft = ""
         self.output: deque[Event] = deque(maxlen=5000)
         self._busy = False
-        self._file_rows: list[dict] = []
+        self._restore_prompt_focus = False
         self._completions: list[str] = []
         self._completion_source: str | None = None
         self.history_search_open = False
@@ -572,7 +566,6 @@ class Shell(Vertical, can_focus=True):
             event.input.value = ""
             self._history_index = len(self.session.history)
             self._draft = ""
-            self._flush_file_rows()
             self.query_one(RichLog).write(
                 Text(f"{self.session.cwd} ❯", style="bold cyan")
             )
@@ -602,11 +595,20 @@ class Shell(Vertical, can_focus=True):
         try:
             await self._jobs_ready.wait()
             width = max(1, self.query_one(RichLog).scrollable_content_region.width)
-            await self.session.execute(source, self.receive, output_width=width)
+            await self.session.execute(
+                source, self.receive, output_width=width, is_terminal=True
+            )
         finally:
-            restore_focus = self.has_focus_within
+            restore_focus = self.has_focus_within or (
+                self._restore_prompt_focus and self.app.focused is None
+            )
+            self._restore_prompt_focus = False
             self._busy = False
-            if self.session.exit_status is None:
+            if (
+                self.session.exit_status is None
+                and self.is_attached
+                and not self._pruning
+            ):
                 self._history_index = len(self.session.history)
                 self._draft = ""
                 self.query_one("#prompt", Static).update(f"{self.session.cwd} ❯")
@@ -619,99 +621,73 @@ class Shell(Vertical, can_focus=True):
         if self.session.exit_status is not None:
             self.post_message(self.Exited(self, self.session.exit_status))
 
-    def _flush_file_rows(self) -> None:
-        if not self._file_rows:
-            return
-        if is_long_file_record(self._file_rows[0]):
-            table = Table(box=None, padding=(0, 2))
-            for header in LONG_FILE_HEADERS:
-                table.add_column(
-                    header, justify="right" if header == "Bytes" else "left"
-                )
-            for row in self._file_rows:
-                kind, size, modified, name = long_file_cells(row)
-                table.add_row(
-                    kind,
-                    size,
-                    modified,
-                    Text(name, style="bold blue" if row["type"] == "directory" else ""),
-                )
-            self.query_one(RichLog).write(table)
-        else:
-            names = [
-                Text(
-                    file_name(row),
-                    style="bold blue" if row["type"] == "directory" else "",
-                )
-                for row in self._file_rows
-            ]
-            self.query_one(RichLog).write(Columns(names, padding=(0, 2)))
-        self._file_rows.clear()
+    async def _show_view(self, view) -> None:
+        terminal = self.query_one("#shell-terminal")
+        owned_focus = self.has_focus_within
+        self.dismiss_completion()
+        terminal.display = False
+        terminal.disabled = True
+        try:
+            await self.mount(view)
+            if isinstance(view, Pager):
+                async with anyio.create_task_group() as group:
+                    group.start_soon(view.load)
+                    await view.closed.wait()
+                    group.cancel_scope.cancel()
+                if view.error is not None:
+                    raise view.error
+            else:
+                await view.closed.wait()
+        finally:
+            restore_focus = self.has_focus_within or (
+                owned_focus and self.app.focused is None
+            )
+            with anyio.CancelScope(shield=True):
+                await view.remove()
+            terminal.disabled = False
+            terminal.display = True
+            if restore_focus:
+                self._restore_prompt_focus = True
+                if not self._busy and self.is_attached and not self._pruning:
+                    self.query_one(CommandInput).focus(scroll_visible=False)
+            self._request_prompt_scroll()
 
     async def receive(self, event: Event) -> None:
         self.output.append(event)
+        if not self.is_attached or self._pruning:
+            return
         transcript = self.query_one(RichLog)
-        if event.kind in {"edit", "page"}:
-            self._flush_file_rows()
-            view = (
-                FileEditor(self.session.filesystem, event.value.path)
-                if event.kind == "edit"
-                else Pager(event.value)
-            )
+        if event.kind in {"edit", "page", "view"}:
             event.value.handled = True
-            terminal = self.query_one("#shell-terminal")
-            self.dismiss_completion()
-            terminal.display = False
-            terminal.disabled = True
-            try:
-                await self.mount(view)
-                if isinstance(view, Pager):
-                    async with anyio.create_task_group() as group:
-                        group.start_soon(view.load)
-                        await view.closed.wait()
-                        group.cancel_scope.cancel()
-                    if view.error is not None:
-                        raise view.error
+            async with AsyncExitStack() as stack:
+                if event.kind == "view":
+                    view = await stack.enter_async_context(event.value.open(self.app))
+                elif event.kind == "edit":
+                    view = FileEditor(self.session.filesystem, event.value.path)
                 else:
-                    await view.closed.wait()
-            finally:
-                restore_focus = self.has_focus_within
-                with anyio.CancelScope(shield=True):
-                    await view.remove()
-                terminal.disabled = False
-                terminal.display = True
-                if restore_focus:
-                    self.query_one(CommandInput).focus(scroll_visible=False)
-                self._request_prompt_scroll()
+                    view = Pager(event.value)
+                await self._show_view(view)
         elif event.kind == "clear":
-            self._file_rows.clear()
             transcript.clear()
             self.output.clear()
-        elif (
-            event.kind == "output"
-            and is_file_record(event.value)
-            and "path" not in event.value
-        ):
-            # Bound presentation buffering while keeping pipeline records untouched.
-            if self._file_rows and is_long_file_record(
-                self._file_rows[0]
-            ) != is_long_file_record(event.value):
-                self._flush_file_rows()
-            self._file_rows.append(event.value)
-            if len(self._file_rows) >= 128:
-                self._flush_file_rows()
         else:
-            self._flush_file_rows()
             if event.kind == "job":
                 job = event.value
                 transcript.write(Text(f"[{job.id}] {job.state}  {job.source}"))
             if event.kind in {"output", "error"}:
-                transcript.write(
-                    Text(
-                        format_value(event.value),
-                        style="red" if event.kind == "error" else "",
+                if (
+                    event.kind == "output"
+                    and not isinstance(event.value, str)
+                    and is_renderable(event.value)
+                ):
+                    transcript.write(event.value)
+                else:
+                    transcript.write(
+                        Text(
+                            format_value(event.value),
+                            style="red" if event.kind == "error" else "",
+                        )
                     )
-                )
 
     def action_cancel(self) -> None:
         self.cancel()
@@ -894,6 +870,27 @@ class Shell(Vertical, can_focus=True):
             self.query_one(CommandInput).focus(scroll_visible=False)
 
 
+class ShellFooter(Footer):
+    """Keep host shortcuts separate when a pane supplies its own footer."""
+
+    def compose(self) -> ComposeResult:
+        focused = self.app.focused
+        pane = (
+            next((node for node in focused.ancestors if isinstance(node, Shell)), None)
+            if focused is not None
+            else None
+        )
+        local_footer = pane is not None and bool(pane.query(Footer))
+        allowed = {
+            key
+            for key, active in self.screen.active_bindings.items()
+            if not local_footer or active[0] is self.app or isinstance(active[0], Shell)
+        }
+        for widget in super().compose():
+            if not isinstance(widget, FooterKey) or widget.key in allowed:
+                yield widget
+
+
 class ShellApp(App, inherit_bindings=False):
     TITLE = "Anyshell"
     BINDINGS = [
@@ -926,7 +923,7 @@ class ShellApp(App, inherit_bindings=False):
         from .panes import ShellWorkspace
 
         yield ShellWorkspace(self.session, prompt_position=self.prompt_position)
-        yield Footer()
+        yield ShellFooter()
 
     async def action_split_pane(self, orientation: str) -> None:
         from .panes import ShellWorkspace

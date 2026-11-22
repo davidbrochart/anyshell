@@ -7,6 +7,28 @@ from .commands import render
 LONG_FILE_HEADERS = ("Type", "Bytes", "Modified (UTC)", "Name")
 
 
+def file_listing(rows, *, long=False):
+    """Build ls's terminal presentation without changing its pipeline records."""
+    from rich.columns import Columns
+    from rich.table import Table
+    from rich.text import Text
+
+    def name(row):
+        return Text(
+            file_name(row), style="bold blue" if row["type"] == "directory" else ""
+        )
+
+    if not long:
+        return Columns([name(row) for row in rows], padding=(0, 2))
+    table = Table(box=None, padding=(0, 2))
+    for header in LONG_FILE_HEADERS:
+        table.add_column(header, justify="right" if header == "Bytes" else "left")
+    for row in rows:
+        kind, size, modified, _ = long_file_cells(row)
+        table.add_row(kind, size, modified, name(row))
+    return table
+
+
 def is_file_record(value) -> bool:
     return (
         isinstance(value, dict)

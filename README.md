@@ -2,7 +2,8 @@
 
 An async shell whose commands are Python functions. The engine is independent of
 its optional Anytext widget: both can run locally on the desktop or in Pyodide.
-No shell command starts an OS process or needs a worker thread.
+Built-in commands run in-process. Optional command plugins may start external
+services.
 
 ## Run it
 
@@ -18,6 +19,29 @@ working directory. Use `--root /path/to/workspace` to choose another directory.
 The session never changes Python's process working directory. Paths use `/` on
 all platforms. Local symlinks must resolve inside the workspace; this is a path
 boundary, not a sandbox for arbitrary Python commands or untrusted code.
+
+### External command plugins
+
+Packages can register commands through the `anyshell.commands` entry-point
+group. Running `anyshell` discovers and loads all installed plugins in name
+order. Use `anyshell --disable NAME` to skip a plugin, or
+`anyshell --plugin NAME` to load only selected plugins. Both options are
+repeatable; disabled plugins are never imported, even if explicitly selected.
+
+A plugin declares its synchronous registration hook in its own `pyproject.toml`:
+
+```toml
+[project.entry-points."anyshell.commands"]
+mytools = "mytools.shell:register"
+```
+
+The hook receives the session and calls `session.register(Command(...))`.
+The plugin owns its command definitions, argument parsing and presentation.
+New panes inherit the registered commands. Custom hosts can use
+`anyshell.plugins.load_plugins(session)` to discover all plugins, or pass a
+list of names to select specific plugins. Use `disabled=["mytools"]` to exclude
+plugins. Constructing a `Session` alone does
+not load plugins.
 
 The prompt is inline by default: it follows the latest output in a shared scrollback
 area. Typing or completing a command brings it back into view. For a fixed bottom
@@ -135,9 +159,10 @@ clear
 ```
 
 Pipelines exchange Python values through bounded AnyIO streams. `ls` emits
-records, displayed as names in columns in the widget (directories have a trailing
-`/` and blue styling). Headless output lists one name per line. Pipeline values
-remain records; `select` extracts fields; `count` emits an integer. `cat` and `grep`
+records to pipelines and captures. At a terminal, it produces names in columns
+(directories have a trailing `/` and blue styling). Redirected headless output
+lists one name per line. Pipeline values remain records; `select` extracts fields;
+`count` emits an integer. `cat` and `grep`
 stream text lines. `sort` buffers its input. A failure in any stage fails the
 pipeline. Filesystem mutations, `cd`, and `clear` run outside pipelines.
 
@@ -483,6 +508,20 @@ Input and output are AnyIO object streams; a returned value is also emitted as
 one pipeline value. Command functions should stay cooperative for cancellation.
 `Session.cancel()` must be called from the session's event loop.
 
+`stdout.is_terminal` tells commands whether their output goes directly to a
+terminal. It is false for pipes, Python captures, and output redirections.
+Commands can send Rich renderables (such as `Text`, `Table`, or `Columns`) to a
+terminal and raw objects elsewhere; the frontend simply displays the chosen
+representation. For example, `ls` selects columns or a table based on `-l`, but
+preserves file dictionaries in pipelines and captures. The last stage of a
+pipeline can still use terminal presentation.
+
+Custom hosts opt in with `Session.execute(..., is_terminal=True)`; the default
+is false. The Anytext frontend enables it automatically, and `anyshell -c`
+checks whether its stdout is a terminal.
+Cyclopts help follows the same rule: direct help retains its colors, while
+pipes, captures, and file redirections receive plain text.
+
 ```python
 from typing import Annotated
 
@@ -507,9 +546,52 @@ session.register(Command("upper", "Uppercase input values", upper))
 `ctx.fs` exposes the filesystem and `ctx.emit` emits frontend events. Parsing
 and help never expose the injected parameters as command options.
 
+`Command` also accepts a Cyclopts `App` containing subcommands, nested apps,
+or a default handler:
+
+```python
+from typing import Annotated
+
+from cyclopts import App, Parameter
+from anyshell import Command
+
+tools = App(name="tools", help="Shared command tree")
+
+
+@tools.command
+async def greet(name: str, *, stdout: Annotated[object, Parameter(parse=False)]):
+    await stdout.send(f"Hello {name}")
+
+
+session.register(Command("tools", "Shared command tree", tools))
+# tools greet Alice
+# tools greet --help
+# help tools greet
+```
+
+Anyshell uses the app's parser and awaits the selected callback directly in its
+existing event loop. It preserves the app's definitions for standalone use;
+it does not start the app's CLI runner. In an app, mark injected `ctx`, `context`,
+`stdin`, and `stdout` parameters with `Parameter(parse=False)` (or configure the
+app's `default_parameter` accordingly). The host must supply these dependencies
+when using the same callbacks outside Anyshell. Command-tree completion includes
+subcommands, aliases, and the selected subcommand's options.
+
 For the frontend, import `Shell` from `anyshell.frontend` and yield
 `Shell(session)` in any Anytext app. History and working directory live in the
 session, so the engine and UI can evolve independently.
+
+Commands can open interactive interfaces with `await ctx.open_view(factory)`.
+The factory is an async context manager called with the existing host app. It
+yields an Anytext widget exposing an AnyIO `closed` event, and owns that widget's
+services. Anyshell hides the terminal in that pane, mounts the widget, and waits
+for `closed`. It removes the widget before exiting the factory and restores the
+prompt. Cancellation and closing the pane also unwind the factory. The host
+continues to own its terminal driver and event loop.
+
+Interactive views require the Anytext frontend and foreground execution; they
+cannot be piped, redirected, or captured in Python assignments. No application
+specific knowledge is needed in Anyshell to host them.
 
 ## Browser demo
 
