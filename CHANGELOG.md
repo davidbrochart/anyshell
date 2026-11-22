@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 — 2026-11-22
+
 - Host command-provided interactive widgets in the current pane with
   `ctx.open_view()`, restoring the prompt and releasing services on close.
 
