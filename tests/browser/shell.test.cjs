@@ -158,6 +158,7 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython("'browser.txt' in [r['name'] for r in session.filesystem.listdir('/')]"));
     assert.equal(await python("list(session.filesystem.read_lines('/browser.txt')) == ['hello browser']"), true);
+    assert.equal(await python("Path('/workspace/browser.txt').read_text()"), 'hello browser\n');
     assert.equal(await python("not constants.THREADS_ENABLED"), true);
     await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython('not session.running'));
     await page.keyboard.type('ls');
@@ -180,6 +181,25 @@ test(`Python commands, pipelines and cancellation work with a ${promptPosition} 
       await page.waitForFunction(source => window.anyshellDemo.pyodide.runPython(
         `session.history[-1] == ${JSON.stringify(source)} and not browser_app.query_one('Shell')._busy`), source);
     }
+    await command('git init browser-repo; cd browser-repo; echo hello > hello.txt; git add hello.txt; git status');
+    assert.equal(await python("session.last_status == 0 and Path('/workspace/browser-repo/.git/HEAD').is_file()"), true);
+    assert.equal(await python("[e.value for e in browser_app.query_one('Shell').output if e.kind == 'output'][-1].strip()"), 'new file:   hello.txt');
+    await command('git commit -m "Browser commit"');
+    assert.equal(await python("session.last_status"), 0, await python("str([e.value for e in browser_app.query_one('Shell').output if e.kind == 'error'][-1:])"));
+    await page.keyboard.type('git log -n 1 --oneline');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "bool(browser_app.query('Pager')) and browser_app.query_one('Pager').has_focus and any('Browser commit' in line.text for line in browser_app.query_one('PagerLog').lines)"));
+    await page.keyboard.press('q');
+    await command('echo goodbye > hello.txt');
+    await page.keyboard.type('git diff');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.anyshellDemo.pyodide.runPython(
+      "bool(browser_app.query('Pager')) and browser_app.query_one('Pager').loaded and browser_app.query_one('Pager').has_focus"));
+    assert.equal(await python("any(segment.text == '+goodbye' and segment.style.color.name == 'green' for line in browser_app.query_one('PagerLog').lines for segment in line)"), true);
+    assert.equal(await python("any(segment.text == '-hello' and segment.style.color.name == 'red' for line in browser_app.query_one('PagerLog').lines for segment in line)"), true);
+    await page.keyboard.press('q');
+    await command('cd /; rm -r browser-repo');
     await command('directory = "notes"');
     await command('data = cat {f"{directory}/fruits.txt"} | grep ^a');
     assert.equal(await python("len(session.variables['data']) == 2 and all(line.startswith('a') for line in session.variables['data'])"), true);

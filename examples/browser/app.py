@@ -1,4 +1,4 @@
-"""Browser-provided terminal and an entirely in-memory workspace."""
+"""Browser-provided terminal with a workspace on Pyodide's filesystem."""
 
 import os
 
@@ -6,12 +6,13 @@ os.environ["ANYTEXT_THREADS"] = "0"
 os.environ["ANYTEXT_COLOR_SYSTEM"] = "truecolor"
 
 import socket
+from pathlib import Path
 
 import anyio
 from anytext import constants
 from anytext.drivers.callback_driver import CallbackDriver
 
-from anyshell import MemoryFileSystem, Session
+from anyshell import LocalFileSystem, Session
 from anyshell.frontend import ShellApp
 
 terminal_write = globals()["terminal_write"]
@@ -50,14 +51,13 @@ class BrowserShell(ShellApp):
         browser_ready()
 
 
-session = Session(
-    MemoryFileSystem(
-        {
-            "readme.txt": "Welcome to anyshell!\n",
-            "notes/fruits.txt": "pear\napple\nbanana\napricot\n",
-        }
-    )
+workspace = Path("/workspace")
+(workspace / "notes").mkdir(parents=True, exist_ok=True)
+(workspace / "readme.txt").write_text("Welcome to anyshell!\n", encoding="utf-8")
+(workspace / "notes" / "fruits.txt").write_text(
+    "pear\napple\nbanana\napricot\n", encoding="utf-8"
 )
+session = Session(LocalFileSystem(workspace))
 browser_app = BrowserShell(
     session,
     prompt_position=globals().get("prompt_position", "inline"),
