@@ -131,7 +131,9 @@ class Pager(Vertical, can_focus=True):
         log = self.query_one(PagerLog)
         try:
             async for line in self.request.lines:
-                log.write(Text(line), scroll_end=False)
+                log.write(
+                    Text(line) if isinstance(line, str) else line, scroll_end=False
+                )
                 await anyio.lowlevel.checkpoint()
         except Exception as error:
             self.error = error

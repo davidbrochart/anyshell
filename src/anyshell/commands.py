@@ -27,8 +27,9 @@ from .engine import (
     _CommandStatus,
 )
 from .filesystem import FileHandle, format_filesystem_error
+from .git import GIT_COMMAND
 
-BUILTINS: list[Command] = []
+BUILTINS: list[Command] = [GIT_COMMAND]
 
 
 def builtin(name: str, description: str, *, standalone: bool = False):

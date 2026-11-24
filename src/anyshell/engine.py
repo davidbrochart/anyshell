@@ -63,7 +63,7 @@ class PageRequest:
     """A frontend displays streamed text and returns when its pager closes."""
 
     title: str
-    lines: AsyncIterator[str]
+    lines: AsyncIterator[str | Text]
     searchable: bool = False
     handled: bool = False
 

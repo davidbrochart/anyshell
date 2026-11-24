@@ -10,6 +10,7 @@ authors = [{name = "David Brochart", email = "david.brochart@gmail.com"}]
 dependencies = [
     "anyio>=4.11,<5",
     "cyclopts>=5.4,<6",
+    "dulwich>=1.2.21,<2",
 ]
 
 [project.optional-dependencies]

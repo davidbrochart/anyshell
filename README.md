@@ -20,6 +20,22 @@ The session never changes Python's process working directory. Paths use `/` on
 all platforms. Local symlinks must resolve inside the workspace; this is a path
 boundary, not a sandbox for arbitrary Python commands or untrusted code.
 
+### Git
+
+Git commands are available in local sessions and in the Pyodide browser demo.
+
+```sh
+uv run anyshell -c 'git --help'
+uv run anyshell -c 'cd my-repo; git status'
+```
+
+`git --help` lists the available subcommands, and `git SUBCOMMAND --help`
+shows their options. Repository discovery starts at the session's current
+directory and stops at the workspace root. Commands such as `git status`
+and `git ls-files` emit text that can feed pipelines and redirections.
+The browser demo stores repositories on Pyodide's virtual filesystem and
+commits skip shell hooks there.
+
 ### External command plugins
 
 Packages can register commands through the `anyshell.commands` entry-point
@@ -608,8 +624,9 @@ uv run python -m http.server --directory .cache/browser-site 8000
 
 Open http://localhost:8000. The Prompt selector switches between inline and bottom
 layouts by reloading the demo (`?prompt=inline` or `?prompt=bottom`). The demo downloads Pyodide and Anytext from public
-package servers and installs this checkout's Anyshell wheel. It uses an in-memory
-workspace and disables threads. Internet access is needed on first load.
+package servers and installs this checkout's Anyshell wheel. The shell maps
+`/` to `/workspace` on Pyodide's virtual filesystem. Files reset on reload,
+and the demo runs with threads disabled. Internet access is needed on first load.
 
 ## Development
 
